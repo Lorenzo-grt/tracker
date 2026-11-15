@@ -180,3 +180,29 @@ export function fixPrompt(repoName, result, fixes, pythons, platforms) {
   );
   return lines.join("\n");
 }
+
+// The verdict's headline sentence.
+export function verdictText(h) {
+  const where = h.targets === 1 ? "this target" : `all ${h.targets} targets`;
+  if (h.gaps === 0) return `✓ All ${h.packages} packages have a wheel for ${where}`;
+  const some = h.targets === 1 ? "this target" : `at least one of the ${h.targets} targets`;
+  return `${h.gaps} of ${h.packages} packages ${h.gaps === 1 ? "has" : "have"} no wheel for ${some}`;
+}
+
+// "Ready for what's next?" shortcuts: the platforms and Pythons people most often move to, that aren't picked yet.
+// Each is {label, pythons, platforms}: the whole selection to switch to.
+export function nextSteps(pythons, platforms) {
+  const out = [];
+  const add = (label, py, plats) => out.push({ label, pythons: sortPythons(py), platforms: PLATFORMS.map(([p]) => p).filter((p) => plats.includes(p)) });
+  const ft = freeThreaded(pythons);
+  if (ft) add(`Free-threaded ${ft}`, [...pythons, ft], platforms);
+  if (!platforms.includes("win-arm64")) add("Windows on ARM", pythons, [...platforms, "win-arm64"]);
+  if (!platforms.includes("linux-aarch64")) add("Linux ARM64", pythons, [...platforms, "linux-aarch64"]);
+  if (!platforms.includes("musl-x86_64") && !platforms.includes("musl-aarch64")) add("Alpine Linux", pythons, [...platforms, "musl-x86_64", "musl-aarch64"]);
+  const newest = PYTHONS.filter((v) => !v.endsWith("t")).at(-1);
+  if (!pythons.includes(newest)) add(`Python ${newest}`, [...pythons, newest], platforms);
+  const all = PLATFORMS.map(([p]) => p);
+  const everyFt = ft ? [...pythons, ft] : pythons;
+  if (out.length > 1) add("Everything", everyFt, all);
+  return out;
+}

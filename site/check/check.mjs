@@ -2,8 +2,8 @@
 // Everything shown from the repo or PyPI goes in with textContent, never as HTML.
 
 import {
-  PLATFORMS, PYTHONS, GAP, parseRepo, pickLockfile, toQuery, fromQuery, sortPythons, freeThreaded,
-  fixFor, rowsFor, headline, cliCommand, fixPrompt,
+  PLATFORMS, PYTHONS, parseRepo, pickLockfile, toQuery, fromQuery, sortPythons, freeThreaded,
+  fixFor, rowsFor, headline, cliCommand, fixPrompt, verdictText, nextSteps,
 } from "./check-logic.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -163,13 +163,13 @@ function renderVerdict() {
   const card = $("verdict").closest("section");
   const repoName = `${state.repo.owner}/${state.repo.name}`;
   card.classList.toggle("clean", h.gaps === 0 && h.targets > 0);
-  if (h.targets === 0) {
-    $("verdict").textContent = `${repoName}'s lockfile leaves out every Python picked`;
-  } else if (h.gaps === 0) {
-    $("verdict").textContent = `✓ All ${h.packages} packages have a wheel for every one of the ${h.targets} targets`;
-  } else {
-    $("verdict").textContent = `${h.gaps} of ${h.packages} packages have no wheel for at least one of the ${h.targets} targets`;
-  }
+  $("verdict").textContent = h.targets === 0 ? `${repoName}'s lockfile leaves out every Python picked` : verdictText(h);
+  const steps = nextSteps(state.pythons, state.platforms);
+  $("next").hidden = !steps.length;
+  $("next-buttons").replaceChildren(...steps.map((s) => el("button", {
+    type: "button", class: "chip shortcut", text: `+ ${s.label}`,
+    onclick: () => { state.pythons = s.pythons; state.platforms = s.platforms; runCheck(); },
+  })));
   $("verdict-detail").textContent = `${repoName} · ${r.lockfile}${state.ref && state.ref !== "HEAD" ? ` at ${state.ref}` : ""} · Python ${sortPythons(state.pythons).join(", ")} on ${state.platforms.length} platform${state.platforms.length === 1 ? "" : "s"}`;
   const alerts = [];
   if (r.outside_lock.length) {

@@ -19,6 +19,10 @@
 .alert { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-size: 0.92rem; }
 .alert.warn { border-color: color-mix(in srgb, var(--source) 55%, var(--line)); }
 
+.next { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0 0; font-size: 0.92rem; }
+.next > span:first-child { font-weight: 600; margin-right: 4px; }
+#next-buttons { display: contents; }
+
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
 .chip[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
 .chip .ci { margin-left: 5px; font-size: 0.7rem; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--bg); }

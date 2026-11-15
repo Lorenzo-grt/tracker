@@ -70,7 +70,7 @@
 
     <section class="cta">
       <h2>Check your own project</h2>
-      <p>The same check runs on your lockfile, for exactly the versions you pin:</p>
+      <p><strong><a href="check/">Paste a GitHub repo</a></strong> to see which of its dependencies have no wheel for the platforms it ships to, and the release that fixes each. It runs in your browser. Or run the same check on your lockfile, for exactly the versions you pin:</p>
       <pre><code>uvx wheelgap -p 3.13 -t linux-aarch64,musl-aarch64 --explain</code></pre>
       <p>It reads <code>uv.lock</code>, <code>poetry.lock</code>, <code>pdm.lock</code>, <code>Pipfile.lock</code>, <code>pylock.toml</code> and <code>requirements.txt</code>, and works as a GitHub Action and a pre-commit hook. <a href="https://github.com/wheelgap/wheelgap">wheelgap on GitHub</a></p>
     </section>

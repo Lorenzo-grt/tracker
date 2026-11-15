@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseRepo, rawUrl, pickLockfile, toQuery, fromQuery, sortPythons, freeThreaded, fixFor, rowsFor, headline,
-  cliCommand, fixPrompt,
+  cliCommand, fixPrompt, verdictText, nextSteps,
 } from "../../site/check/check-logic.mjs";
 
 test("parseRepo reads the forms people paste", () => {
@@ -105,4 +105,21 @@ test("the CLI command and the fix prompt reproduce the check", () => {
   assert.match(prompt, /uvx wheelgap uv\.lock -p 3\.14 -t linux-x86_64,win-arm64/);
   assert.doesNotMatch(prompt, /weren't looked up/);
   assert.match(fixPrompt("o/r", result, null, ["3.14"], ["linux-x86_64"]), /weren't looked up on PyPI/);
+});
+
+test("the verdict reads right for one target and many", () => {
+  assert.equal(verdictText({ gaps: 1, packages: 77, targets: 1 }), "1 of 77 packages has no wheel for this target");
+  assert.equal(verdictText({ gaps: 5, packages: 79, targets: 4 }), "5 of 79 packages have no wheel for at least one of the 4 targets");
+  assert.equal(verdictText({ gaps: 0, packages: 10, targets: 1 }), "✓ All 10 packages have a wheel for this target");
+  assert.equal(verdictText({ gaps: 0, packages: 10, targets: 6 }), "✓ All 10 packages have a wheel for all 6 targets");
+});
+
+test("next steps offer what isn't picked yet, as whole selections", () => {
+  const steps = nextSteps(["3.14"], ["linux-x86_64"]);
+  assert.deepEqual(steps.map((s) => s.label), ["Free-threaded 3.14t", "Windows on ARM", "Linux ARM64", "Alpine Linux", "Python 3.15", "Everything"]);
+  assert.deepEqual(steps[0], { label: "Free-threaded 3.14t", pythons: ["3.14", "3.14t"], platforms: ["linux-x86_64"] });
+  assert.deepEqual(steps[3].platforms, ["linux-x86_64", "musl-x86_64", "musl-aarch64"]);
+  assert.equal(steps.at(-1).platforms.length, 8);
+  const all = ["linux-x86_64", "linux-aarch64", "musl-x86_64", "musl-aarch64", "macos-arm64", "macos-x86_64", "win-amd64", "win-arm64"];
+  assert.deepEqual(nextSteps(["3.15", "3.15t"], all), []);
 });
