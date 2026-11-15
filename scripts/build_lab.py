@@ -470,7 +470,9 @@ def problems(result: object, job: dict) -> list[str]:
     if gil_expected != _one_of(gil, GIL) or (gil is not None and not _one_of(gil, GIL)):
         out.append("gil")
     module = result["gil_module"]
-    if module is not None and not (isinstance(module, str) and gil == "re-enabled" and GIL_MODULE.fullmatch(module)):
+    if module is not None and not (
+        isinstance(module, str) and len(module) <= 100 and gil == "re-enabled" and GIL_MODULE.fullmatch(module)
+    ):
         out.append("gil_module")
     reason = result["reason"]
     if result["outcome"] == "failed":

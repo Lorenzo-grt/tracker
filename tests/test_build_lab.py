@@ -271,10 +271,6 @@ class Helpers(unittest.TestCase):
         self.assertTrue(any(build_lab.interpreter_problem(t) for t in build_lab.TARGETS))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class Census(unittest.TestCase):
     def test_top_and_refresh(self):
         self.assertEqual(pairs(build_lab.plan(COVERAGE, None, 50, "2026-11-15", top=2)),
@@ -291,6 +287,7 @@ class Census(unittest.TestCase):
         self.assertEqual(build_lab.problems(ft, FT_JOB), [])
         self.assertTrue(build_lab.problems(dict(GOOD, gil_module="x"), JOB))  # no GIL re-enabled: no module
         self.assertTrue(build_lab.problems(dict(ft, gil_module="x; rm"), FT_JOB))
+        self.assertTrue(build_lab.problems(dict(ft, gil_module="a" * 101), FT_JOB))
 
     def test_merge_links_the_run_from_its_own_environment(self):
         merged, _ = build_lab.merge(
@@ -298,3 +295,7 @@ class Census(unittest.TestCase):
         )
         self.assertEqual(merged["results"][0]["log"], "https://github.com/wheelgap/tracker/actions/runs/1")
         self.assertTrue(build_lab.problems(dict(GOOD, log="https://evil.example"), JOB))  # a build can't set it
+
+
+if __name__ == "__main__":
+    unittest.main()
