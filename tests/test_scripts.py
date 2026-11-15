@@ -167,11 +167,12 @@ class BuildLookupTests(TempDir):
             set(one),
             {
                 "schema", "name", "version", "rank", "pure", "error", "generated", "wheelgap", "results", "notes",
-                "pyodide", "bundled",
+                "pyodide", "bundled", "builds",
             },
         )
         self.assertEqual((one["pyodide"], one["bundled"]), ({}, {}))  # no pyodide_locks in this scan
         self.assertEqual(one["notes"], [])  # no notes directory given
+        self.assertEqual(one["builds"], [])  # no build lab results given
         self.assertEqual(one["schema"], 1)
         self.assertEqual(one["name"], "typing-extensions")
         self.assertEqual(one["generated"], data["generated"])
@@ -179,6 +180,29 @@ class BuildLookupTests(TempDir):
         two = json.loads((out / "zope-interface.json").read_text(encoding="utf-8"))
         self.assertEqual(two["error"], "lookup failed")
         self.assertEqual(two["results"], {LABELS[0]: "unknown", LABELS[1]: "n/a"})
+
+    def test_build_lab_results_go_to_their_package(self):
+        lab = {
+            "schema": 1,
+            "updated": "2026-11-15",
+            "targets": {},
+            "results": [
+                {
+                    "schema": 1, "name": "Typing_Extensions", "version": "1.0", "target": "3.14t win-arm64",
+                    "runner": "windows-11-arm", "python": "3.14.2t", "outcome": "built", "seconds": 87,
+                    "wheel": "cp314-cp314t-win_arm64", "extensions": 1, "import": "ok", "gil": "re-enabled",
+                    "reason": None, "excerpt": "", "toolchains": ["cl"], "date": "2026-11-15",
+                },
+            ],
+        }
+        out = self.root / "packages"
+        data = scan(packages=[package(1, "typing-extensions"), package(2, "other")])
+        build_lookup.build(self.write("coverage.json", data), out, builds_path=self.write("builds.json", lab))
+        one = json.loads((out / "typing-extensions.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(one["builds"]), 1)
+        self.assertEqual(set(one["builds"][0]), set(build_lookup.BUILD_FIELDS))
+        self.assertEqual((one["builds"][0]["gil"], one["builds"][0]["seconds"]), ("re-enabled", 87))
+        self.assertEqual(json.loads((out / "other.json").read_text(encoding="utf-8"))["builds"], [])
 
     def test_index_lists_every_package_and_the_targets(self):
         out = self.root / "packages"
