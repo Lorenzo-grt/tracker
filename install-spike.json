@@ -1,0 +1,222 @@
+[
+{
+"repo": "NousResearch/hermes-agent",
+"branch": "main",
+"stars": 263568
+},
+{
+"repo": "TheAlgorithms/Python",
+"branch": "master",
+"stars": 226136
+},
+{
+"repo": "yt-dlp/yt-dlp",
+"branch": "master",
+"stars": 208019
+},
+{
+"repo": "langflow-ai/langflow",
+"branch": "main",
+"stars": 156671
+},
+{
+"repo": "Graphify-Labs/graphify",
+"branch": "v8",
+"stars": 148181
+},
+{
+"repo": "harry0703/MoneyPrinterTurbo",
+"branch": "main",
+"stars": 143744
+},
+{
+"repo": "browser-use/browser-use",
+"branch": "main",
+"stars": 121090
+},
+{
+"repo": "debpalash/VoiceStudio",
+"branch": "main",
+"stars": 111126
+},
+{
+"repo": "fastapi/fastapi",
+"branch": "master",
+"stars": 104731
+},
+{
+"repo": "karpathy/autoresearch",
+"branch": "master",
+"stars": 100082
+},
+{
+"repo": "unclecode/crawl4ai",
+"branch": "main",
+"stars": 87389
+},
+{
+"repo": "headroomlabs-ai/headroom",
+"branch": "main",
+"stars": 79710
+},
+{
+"repo": "usestrix/strix",
+"branch": "main",
+"stars": 75692
+},
+{
+"repo": "pallets/flask",
+"branch": "main",
+"stars": 75132
+},
+{
+"repo": "NanmiCoder/MediaCrawler",
+"branch": "main",
+"stars": 71150
+},
+{
+"repo": "docling-project/docling",
+"branch": "main",
+"stars": 70612
+},
+{
+"repo": "Alishahryar1/free-claude-code",
+"branch": "main",
+"stars": 70443
+},
+{
+"repo": "commaai/openpilot",
+"branch": "master",
+"stars": 64146
+},
+{
+"repo": "sansan0/TrendRadar",
+"branch": "master",
+"stars": 63644
+},
+{
+"repo": "BerriAI/litellm",
+"branch": "main",
+"stars": 63299
+},
+{
+"repo": "vectorize-io/hindsight",
+"branch": "main",
+"stars": 61178
+},
+{
+"repo": "crewAIInc/crewAI",
+"branch": "main",
+"stars": 60949
+},
+{
+"repo": "karpathy/nanochat",
+"branch": "master",
+"stars": 60575
+},
+{
+"repo": "MemPalace/mempalace",
+"branch": "develop",
+"stars": 60566
+},
+{
+"repo": "CorentinJ/Real-Time-Voice-Cloning",
+"branch": "master",
+"stars": 60240
+},
+{
+"repo": "bojieli/ai-agent-book",
+"branch": "main",
+"stars": 58163
+},
+{
+"repo": "Textualize/rich",
+"branch": "main",
+"stars": 57811
+},
+{
+"repo": "zylon-ai/private-gpt",
+"branch": "main",
+"stars": 57636
+},
+{
+"repo": "run-llama/llama_index",
+"branch": "main",
+"stars": 52910
+},
+{
+"repo": "roboflow/supervision",
+"branch": "develop",
+"stars": 51631
+},
+{
+"repo": "exo-explore/exo",
+"branch": "main",
+"stars": 48433
+},
+{
+"repo": "paperless-ngx/paperless-ngx",
+"branch": "dev",
+"stars": 48135
+},
+{
+"repo": "apache/airflow",
+"branch": "main",
+"stars": 47488
+},
+{
+"repo": "mitmproxy/mitmproxy",
+"branch": "main",
+"stars": 46981
+},
+{
+"repo": "streamlit/streamlit",
+"branch": "develop",
+"stars": 46362
+},
+{
+"repo": "getsentry/sentry",
+"branch": "master",
+"stars": 45780
+},
+{
+"repo": "ManimCommunity/manim",
+"branch": "main",
+"stars": 42569
+},
+{
+"repo": "OpenBMB/VoxCPM",
+"branch": "main",
+"stars": 42512
+},
+{
+"repo": "volcengine/OpenViking",
+"branch": "main",
+"stars": 42258
+},
+{
+"repo": "datalab-to/marker",
+"branch": "master",
+"stars": 40924
+},
+{
+"repo": "PostHog/posthog",
+"branch": "master",
+"stars": 40799
+},
+{
+"repo": "HKUDS/LightRAG",
+"branch": "main",
+"stars": 40706
+},
+{
+"repo": "p-e-w/heretic",
+"branch": "master",
+"stars": 40658
+},
+{
+"repo": "stanfordnlp/dspy",
+"branch": "main",
+"stars": 39077
+}
+]

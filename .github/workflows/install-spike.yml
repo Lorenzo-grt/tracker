@@ -1,0 +1,70 @@
+name: Install spike (not for merging)
+
+# Can GitHub's most-starred Python apps be installed on Windows on ARM? For each, `uv sync --frozen` its own
+# uv.lock (dependencies only, as locked, with the Python it asks for) on windows-11-arm, with ubuntu-24.04 as the
+# control. Third-party build code runs here: read-only token, no secrets, nothing published.
+
+on:
+  pull_request:
+    paths: [".github/workflows/install-spike.yml", "install-spike.json"]
+
+permissions:
+  contents: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      repos: ${{ steps.r.outputs.repos }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: r
+        run: echo "repos=$(python3 -c 'import json; print(json.dumps(json.load(open("install-spike.json"))))')" >> "$GITHUB_OUTPUT"
+
+  install:
+    needs: list
+    name: ${{ matrix.repo.repo }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 24
+      matrix:
+        os: [windows-11-arm, ubuntu-24.04]
+        repo: ${{ fromJSON(needs.list.outputs.repos) }}
+    steps:
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Install the app's locked dependencies
+        shell: bash
+        env:
+          REPO: ${{ matrix.repo.repo }}
+          BRANCH: ${{ matrix.repo.branch }}
+          OS: ${{ matrix.os }}
+        run: |
+          git clone -q --depth 1 --branch "$BRANCH" "https://github.com/$REPO.git" app
+          cd app
+          start=$(date +%s)
+          set +e
+          timeout 2700 uv sync --frozen --no-dev --no-install-project --no-install-workspace > ../install.log 2>&1
+          code=$?
+          set -e
+          secs=$(( $(date +%s) - start ))
+          tail -40 ../install.log
+          failed=$(grep -a -oE "Failed to (build|download|install) \`[^\`]+\`" ../install.log | head -3 | tr '\n' ';')
+          nowheel=$(grep -a -oE "has no wheels? (with a matching platform tag|for the current platform)[^\n]{0,80}" ../install.log | head -2 | tr '\n' ';')
+          python - "$REPO" "$OS" "$code" "$secs" "$failed" "$nowheel" <<'PY' > ../result.json
+          import json, sys
+          repo, os_, code, secs, failed, nowheel = sys.argv[1:]
+          print(json.dumps({"repo": repo, "os": os_, "ok": code == "0", "code": int(code), "seconds": int(secs),
+                            "failed": failed, "no_wheel": nowheel}))
+          PY
+          cat ../result.json
+          echo "| $REPO | $OS | $([ "$code" = 0 ] && echo installs || echo FAILS) | ${secs}s | $failed $nowheel |" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: install-${{ strategy.job-index }}
+          path: result.json
+          if-no-files-found: ignore
