@@ -118,5 +118,6 @@ test("build lab verdicts never call a wheel without an extension module a workin
   assert.deepEqual(v({ outcome: "failed", reason: "needs OpenSSL", import: null, wheel: null, extensions: null }),
     { kind: "fails", text: "fails to build: needs OpenSSL" });
   assert.equal(v({ outcome: "failed", reason: "other" }).text, "fails to build");
+  assert.equal(v({ outcome: "failed", reason: "unsupported platform" }).kind, "unsupported");  // uvloop on Windows: not a failure
   assert.equal(v({ outcome: "timeout", seconds: 2400 }).text, "didn't finish building in 40 min");
 });

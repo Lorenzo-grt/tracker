@@ -2,9 +2,9 @@
 // The build lab section: reads data/builds.json (scripts/build_lab.py) and shows, for packages with no wheel on a
 // platform, whether they build from source there and work. Everything from the file goes in as text, never HTML.
 (function () {
-  const ORDER = ["gil", "fails", "broken", "partial", "slow", "works", "pure"];
-  const PILL = { works: "s-wheel", gil: "s-source", pure: "s-none", partial: "s-source", slow: "s-source", broken: "s-missing", fails: "s-missing" };
-  const LABEL = { works: "works", gil: "GIL back on", pure: "pure Python", partial: "no compiled part", broken: "won't load", fails: "fails", slow: "too slow" };
+  const ORDER = ["gil", "fails", "broken", "partial", "slow", "works", "pure", "unsupported"];
+  const PILL = { works: "s-wheel", gil: "s-source", pure: "s-none", unsupported: "s-none", partial: "s-source", slow: "s-source", broken: "s-missing", fails: "s-missing" };
+  const LABEL = { works: "works", gil: "GIL back on", pure: "pure Python", unsupported: "unsupported", partial: "no compiled part", broken: "won't load", fails: "fails", slow: "too slow" };
   const el = (tag, attrs = {}, ...kids) => {
     const e = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {

@@ -18,7 +18,7 @@ const STAGES = {
   checking: "Checking every package…",
 };
 const SHOWN = 60;
-const LAB_SHORT = { works: "builds ✓", gil: "builds, GIL on", pure: "builds, pure Python", partial: "no compiled part", broken: "builds, won't load", fails: "won't build", slow: "too slow" };
+const LAB_SHORT = { works: "builds ✓", gil: "builds, GIL on", pure: "builds, pure Python", unsupported: "unsupported here", partial: "no compiled part", broken: "builds, won't load", fails: "won't build", slow: "too slow" };
 const LAB_LOOKUPS = 120;
 
 // The tracker's build lab results for the gap rows' packages, from its own per-package files (same origin).
