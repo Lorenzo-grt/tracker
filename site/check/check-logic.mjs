@@ -118,11 +118,11 @@ export function freeThreaded(pythons) {
 // One row's fix, for the table and the prompt: {kind, version?, text}. kind is one of:
 // "all" (one release has a wheel for every gap), "some" (releases for some gaps), "loses" (every newer release with a
 // wheel for a gap drops a wheel the pin has elsewhere), "none" (no newer release has one), "private" (not looked up:
-// not positively a PyPI package, so its name stays off pypi.org), "unchecked" (no gap to fix: couldn't be checked) or
+// its index isn't known to be PyPI, as with the CLI's --suggest, so its name stays off pypi.org), "unchecked" (no gap to fix: couldn't be checked) or
 // "pending" (not looked up yet, or the lookup failed).
 export function fixFor(row, fixes) {
   if (!row.gaps.length) return { kind: "unchecked", text: "" };
-  if (row.lookup === false) return { kind: "private", text: "not looked up (not from PyPI)" };
+  if (row.lookup === false) return { kind: "private", text: "not looked up (index not known to be PyPI)" };
   const fix = fixes?.[`${row.name}==${row.version}`];
   if (fix === undefined) return { kind: "pending", text: "" };
   const found = Object.entries(fix.found);
@@ -190,7 +190,7 @@ export function fixPrompt(repoName, result, fixes, pythons, platforms) {
   section("some", "These have a newer release with wheels for some of the gaps:");
   section("loses", "For these, every newer release with the missing wheel drops a wheel the pinned one has elsewhere, so a bump trades one gap for another:");
   section("none", "No newer release has a wheel for these (consider dropping the target, another package, or building wheels):");
-  section("private", "These don't come from PyPI (another index, Git or a path), so they weren't looked up; check them where they're published:");
+  section("private", "These weren't looked up, since the lockfile doesn't record their index as PyPI (Poetry and PDM locks don't, nor Git or path sources); look for a newer release with wheels on the index they come from:");
   section("pending", "These weren't looked up on PyPI, so check them with `uvx wheelgap --explain --suggest`:");
   lines.push(
     "Check each bump against our version constraints (a new major version may need code changes), update the lockfile with the project's own tool, and confirm with:",

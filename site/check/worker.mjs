@@ -127,7 +127,9 @@ async function check(id, root, lockfile, options) {
   if (!repo) throw new Failure("state", "That repository is no longer loaded. Check it again.");
   if (!repo.fetched.has(lockfile)) {
     post({ id, type: "progress", stage: "lockfile", path: lockfile });
-    write(py, repo.root, lockfile, await getText(rawUrl(repo, repo.ref, lockfile)));
+    const bytes = await getText(rawUrl(repo, repo.ref, lockfile));
+    if (!loaded.has(root)) throw new Failure("stale", "superseded by a newer load"); // don't recreate a removed root
+    write(py, repo.root, lockfile, bytes);
     repo.fetched.add(lockfile);
   }
   post({ id, type: "progress", stage: "checking" });
@@ -164,8 +166,15 @@ self.onmessage = async ({ data }) => {
     } else if (type === "check") {
       const result = await check(id, data.root, data.lockfile, data.options);
       post({ id, type: "result", result });
-      if (!result.error && result.rows.some((r) => r.lookup)) post({ id, type: "fixes", fixes: await fixes(result.rows) });
-      else if (!result.error) post({ id, type: "fixes", fixes: {} });
+      if (!result.error) {
+        let found = {};
+        try {
+          if (result.rows.some((r) => r.lookup)) found = await fixes(result.rows);
+        } catch {
+          // a failed lookup leaves those rows "not looked up"; the result above stands
+        }
+        post({ id, type: "fixes", fixes: found });
+      }
     }
   } catch (e) {
     post({ id, type: "error", kind: e.kind || "internal", message: e.kind ? e.message : `Something went wrong: ${e.message || e}` });

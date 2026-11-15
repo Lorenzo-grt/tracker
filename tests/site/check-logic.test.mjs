@@ -134,7 +134,8 @@ test("fixFor: a bump that drops a wheel elsewhere isn't 'no newer wheel', and pr
   const res = { ...result, rows: [r, priv] };
   const prompt = fixPrompt("o/r", res, { "foo==1.0": { found: {}, loses: ["3.13 linux-aarch64"] } }, ["3.13"], ["linux-aarch64"]);
   assert.match(prompt, /trades one gap for another[^\n]*\n- foo 1\.0: 3\.13 linux-aarch64/);
-  assert.match(prompt, /don't come from PyPI[^\n]*\n- corp-utils 1\.0/);
+  assert.match(prompt, /doesn't record their index as PyPI[^\n]*\n- corp-utils 1\.0/);
+  assert.doesNotMatch(prompt, /don't come from PyPI/);
   assert.doesNotMatch(prompt, /No newer release has a wheel/);
   assert.doesNotMatch(prompt, /9\.9/);
 });

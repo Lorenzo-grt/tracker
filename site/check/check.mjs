@@ -23,7 +23,7 @@ const FIX_TEXT = {
   some: (f) => `→ ${f.text}`,
   loses: () => "only by losing a wheel elsewhere",
   none: () => "no newer wheel",
-  private: () => "not looked up (not from PyPI)",
+  private: () => "not looked up (index not known to be PyPI)",
   unchecked: () => "",
 };
 
@@ -281,7 +281,7 @@ function renderTargets() {
   const rows = r.targets.filter((t) => t.python === state.python).map((t) => {
     const c = r.per_target[t.label];
     const total = c.wheel + c.source + c.missing + c.unknown;
-    const without = total - c.wheel;
+    const without = c.source + c.missing; // unknown is in the tooltip, never counted as "without a wheel"
     const pct = (k) => (total ? (100 * c[k]) / total : 0);
     const pressed = state.platform === t.platform;
     return el("li", {}, el("button", {
@@ -291,7 +291,7 @@ function renderTargets() {
     el("span", { class: "pname" }, NAMES[t.platform] || t.platform, el("small", { text: t.platform })),
     el("span", { class: "bar", title: outside ? "not in the lock's Pythons" : `${c.wheel} wheel, ${c.source} from source, ${c.missing} can't install${c.unknown ? `, ${c.unknown} unknown` : ""}` },
       ...["wheel", "source", "missing", "unknown"].map((k) => el("span", { class: `b-${k}`, style: `width:${pct(k)}%` }))),
-    el("span", { class: "pct" }, outside ? "–" : without === 0 ? "✓" : String(without), el("small", { text: outside ? "not locked" : without === 0 ? "all wheels" : "without a wheel" }))));
+    el("span", { class: "pct" }, outside ? "–" : without === 0 ? "✓" : String(without), el("small", { text: outside ? "not locked" : without === 0 ? (c.unknown ? `${c.unknown} unknown` : "all wheels") : "without a wheel" }))));
   });
   $("platforms").replaceChildren(...rows);
   $("targets-note").textContent = outside
