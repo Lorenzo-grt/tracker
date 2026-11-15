@@ -102,3 +102,19 @@ test("text fields are capped at 199 characters", () => {
   assert.deepEqual(logic.bundledInfo({ bundled: { x: info("1".repeat(200)) } }), {});
   assert.deepEqual(logic.pyodideReleases({ pythons: { "3.13": { pyodide: "0".repeat(200), lock: LOCK } } }), {});
 });
+
+test("build lab verdicts never call a wheel without an extension module a working build", () => {
+  const base = { outcome: "built", seconds: 87, wheel: "cp314-cp314-win_arm64", extensions: 1, import: "ok", gil: null, reason: null };
+  const v = (r) => logic.labVerdict({ ...base, ...r });
+  assert.deepEqual(v({}), { kind: "works", text: "builds from source in 87 s and imports" });
+  assert.equal(v({ gil: "kept-off", seconds: 289 }).text, "builds from source in 5 min and imports, GIL stays off");
+  assert.equal(v({ gil: "re-enabled" }).kind, "gil");
+  assert.equal(v({ extensions: 0, wheel: "py3-none-any" }).kind, "partial");
+  assert.match(v({ extensions: 0, wheel: "py3-none-any" }).text, /only as pure Python/);
+  assert.equal(v({ extensions: 0 }).kind, "partial");
+  assert.equal(v({ import: "failed" }).kind, "broken");
+  assert.equal(v({ import: "deps-failed" }).kind, "broken");
+  assert.deepEqual(v({ outcome: "failed", reason: "needs OpenSSL", import: null, wheel: null, extensions: null }),
+    { kind: "fails", text: "fails to build: needs OpenSSL" });
+  assert.equal(v({ outcome: "timeout", seconds: 2400 }).text, "didn't finish building in 40 min");
+});

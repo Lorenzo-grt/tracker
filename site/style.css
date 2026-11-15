@@ -161,3 +161,12 @@ footer { margin: 56px auto 40px; color: var(--muted); font-size: 0.85rem; }
 .badge-md { margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); font: 0.8rem var(--mono); white-space: pre-wrap; word-break: break-all; }
 .copy-badge { font: 0.85rem var(--sans); padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: inherit; cursor: pointer; }
 .copy-badge:hover { border-color: var(--text); }
+
+.lab-summary { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 8px; }
+.lab-summary li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.lab-summary .pname { min-width: 11em; font-family: var(--mono); font-size: 0.9rem; }
+.lab-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+.lab-table td { vertical-align: top; }
+.lab-where { color: var(--muted); font-size: 0.8rem; }
+.lab-where details { margin-top: 4px; }
+.lab-where code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }

@@ -68,6 +68,13 @@
       <button class="more" id="more" hidden>Show more</button>
     </section>
 
+    <section aria-labelledby="lab-title" id="lab-section" hidden>
+      <h2 id="lab-title">Build lab: no wheel, but does it build?</h2>
+      <p class="note" id="lab-note"></p>
+      <ul class="lab-summary" id="lab-summary"></ul>
+      <div class="matrix-scroll"><table class="matrix lab-table" id="lab-table"></table></div>
+    </section>
+
     <section class="cta">
       <h2>Check your own project</h2>
       <p><strong><a href="check/">Paste a GitHub repo</a></strong> to see which of its dependencies have no wheel for the platforms it ships to, and the release that fixes each. It runs in your browser. Or run the same check on your lockfile, for exactly the versions you pin:</p>
@@ -82,5 +89,6 @@
 
   <script src="logic.js"></script>
   <script src="app.js"></script>
+  <script src="lab.js"></script>
 </body>
 </html>
