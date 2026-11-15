@@ -23,6 +23,13 @@ on:
       max:
         description: Most builds this run
         default: "40"
+      top:
+        description: Only packages ranked this high (empty for all)
+        default: ""
+      refresh:
+        description: Rebuild recent results too
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -50,7 +57,9 @@ jobs:
       - id: plan
         env:
           MAX: ${{ github.event_name == 'pull_request' && '8' || inputs.max || '40' }}
-        run: python3 scripts/build_lab.py plan data/coverage.json data/builds.json --max "$MAX" --github-output "$GITHUB_OUTPUT"
+          TOP: ${{ inputs.top }}
+          REFRESH: ${{ inputs.refresh && '--refresh' || '' }}
+        run: python3 scripts/build_lab.py plan data/coverage.json data/builds.json --max "$MAX" ${TOP:+--top "$TOP"} $REFRESH --github-output "$GITHUB_OUTPUT"
 
   build:
     needs: plan
@@ -60,7 +69,7 @@ jobs:
     timeout-minutes: 75
     strategy:
       fail-fast: false
-      max-parallel: 12
+      max-parallel: 20
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.hosted) }}
     steps:
@@ -95,7 +104,7 @@ jobs:
     timeout-minutes: 75
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 10
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.docker) }}
     steps:

@@ -118,7 +118,15 @@ REASONS: list[tuple[str, re.Pattern[str]]] = [
             re.IGNORECASE,
         ),
     ),
-    ("unsupported platform", re.compile(r"not supported on|unsupported (platform|architecture)", re.IGNORECASE)),
+    # The package's own message that it doesn't support the platform (uvloop: "does not support Windows").
+    (
+        "unsupported platform",
+        re.compile(
+            r"does not support (windows|macos|linux|this platform|free-threaded|the free-threaded)|"
+            r"not supported on|unsupported (platform|architecture)",
+            re.IGNORECASE,
+        ),
+    ),
     ("compile error", re.compile(r"\berror\b", re.IGNORECASE)),
 ]
 OTHER = "other"
@@ -156,7 +164,7 @@ WHEEL_TAG = re.compile(r"[a-z0-9_.]{1,40}-[a-z0-9_.]{1,40}-[a-z0-9_.]{1,80}", re
 DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
 RESULT_KEYS = frozenset({
     "schema", "name", "version", "target", "runner", "python", "outcome", "seconds", "wheel", "extensions",
-    "import", "gil", "reason", "excerpt", "toolchains",
+    "import", "gil", "gil_module", "reason", "excerpt", "toolchains",
 })  # fmt: skip
 
 
@@ -171,16 +179,21 @@ def today() -> str:
 # --- plan ---------------------------------------------------------------------------------------------------------
 
 
-def plan(coverage: dict, builds: dict | None, limit: int, now: str) -> list[dict]:
-    """The pairs to build, most-downloaded first and taking turns between the lab targets, at most `limit`."""
+def plan(
+    coverage: dict, builds: dict | None, limit: int, now: str, top: int | None = None, refresh: bool = False
+) -> list[dict]:
+    """The pairs to build, most-downloaded first and taking turns between the lab targets, at most `limit`; with
+    `top`, only packages ranked that high (a census of the top N); with `refresh`, recent results are rebuilt too."""
     labels = [t["label"] for t in coverage["targets"]]
     recent = set()
     cutoff = dt.date.fromisoformat(now) - dt.timedelta(days=REFRESH_DAYS)
-    for r in (builds or {}).get("results", []):
+    for r in [] if refresh else (builds or {}).get("results", []):
         if dt.date.fromisoformat(r["date"]) >= cutoff:
             recent.add((canonical(r["name"]), r["version"], r["target"]))
     queues: dict[str, list[dict]] = {t: [] for t in TARGETS}
     for p in sorted(coverage["packages"], key=lambda p: p["rank"]):
+        if top is not None and p["rank"] > top:
+            break
         name, version = p["name"], p["version"]
         if p.get("error") or not isinstance(name, str) or not isinstance(version, str):
             continue
@@ -209,7 +222,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     coverage = json.loads(Path(args.coverage).read_text(encoding="utf-8"))
     builds_path = Path(args.builds)
     builds = json.loads(builds_path.read_text(encoding="utf-8")) if builds_path.exists() else None
-    jobs = plan(coverage, builds, args.max, today())
+    jobs = plan(coverage, builds, args.max, today(), args.top, args.refresh)
     hosted = [j for j in jobs if "image" not in j]
     docker = [j for j in jobs if "image" in j]
     print(
@@ -288,12 +301,20 @@ def wheel_modules(wheel: Path) -> tuple[list[str], int]:
 
 
 IMPORT_CHECK = """
-import importlib, json, sys
-for m in sys.argv[1:]:
-    importlib.import_module(m)
+import importlib, json, re, sys, warnings
+module = None
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    for m in sys.argv[1:]:
+        importlib.import_module(m)
+for w in caught:
+    found = re.search(r"has been enabled to load module '([A-Za-z0-9_.]{1,100})'", str(w.message))
+    if found and module is None:
+        module = found.group(1)
 gil = getattr(sys, "_is_gil_enabled", None)
-print("WHEELGAP-LAB " + json.dumps({"gil_enabled": gil() if gil else None}))
+print("WHEELGAP-LAB " + json.dumps({"gil_enabled": gil() if gil else None, "module": module}))
 """
+GIL_MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,9}", re.ASCII)
 
 
 def interpreter_problem(target: str) -> str | None:
@@ -324,7 +345,7 @@ def run_build(name: str, version: str, target: str, work: Path) -> dict | None:
                            env=env)  # fmt: skip
     except subprocess.TimeoutExpired:
         return {"outcome": "timeout", "seconds": BUILD_TIMEOUT, "wheel": None, "extensions": None, "import": None,
-                "gil": None, "reason": None, "excerpt": ""}  # fmt: skip
+                "gil": None, "gil_module": None, "reason": None, "excerpt": ""}  # fmt: skip
     seconds = round(time.monotonic() - start)
     log = p.stdout + p.stderr
     print(log[-6000:])
@@ -334,10 +355,10 @@ def run_build(name: str, version: str, target: str, work: Path) -> dict | None:
             print("build_lab: pip couldn't download or resolve something; not recording this", file=sys.stderr)
             return None
         return {"outcome": "failed", "seconds": seconds, "wheel": None, "extensions": None, "import": None,
-                "gil": None, "reason": classify(log), "excerpt": excerpt(log)}  # fmt: skip
+                "gil": None, "gil_module": None, "reason": classify(log), "excerpt": excerpt(log)}  # fmt: skip
     modules, extensions = wheel_modules(built[0])
     result = {"outcome": "built", "seconds": seconds, "wheel": wheel_tag(built[0]), "extensions": extensions,
-              "import": None, "gil": None, "reason": None, "excerpt": ""}  # fmt: skip
+              "import": None, "gil": None, "gil_module": None, "reason": None, "excerpt": ""}  # fmt: skip
     install = [sys.executable, "-m", "pip", "install", "--no-cache-dir", str(built[0])]
     try:
         i = subprocess.run(install, check=False, capture_output=True, text=True, errors="replace",
@@ -361,7 +382,11 @@ def run_build(name: str, version: str, target: str, work: Path) -> dict | None:
         return result
     result["import"] = "ok"
     if free_threaded and extensions:
-        result["gil"] = "re-enabled" if json.loads(line.removeprefix("WHEELGAP-LAB "))["gil_enabled"] else "kept-off"
+        answer = json.loads(line.removeprefix("WHEELGAP-LAB "))
+        result["gil"] = "re-enabled" if answer["gil_enabled"] else "kept-off"
+        module = answer.get("module")
+        if result["gil"] == "re-enabled" and isinstance(module, str) and GIL_MODULE.fullmatch(module):
+            result["gil_module"] = module  # the module CPython's RuntimeWarning names
     return result
 
 
@@ -444,6 +469,9 @@ def problems(result: object, job: dict) -> list[str]:
     gil_expected = built and imported == "ok" and planned.endswith("t") and _int(extensions, 10_000) and extensions > 0
     if gil_expected != _one_of(gil, GIL) or (gil is not None and not _one_of(gil, GIL)):
         out.append("gil")
+    module = result["gil_module"]
+    if module is not None and not (isinstance(module, str) and gil == "re-enabled" and GIL_MODULE.fullmatch(module)):
+        out.append("gil_module")
     reason = result["reason"]
     if result["outcome"] == "failed":
         if not _one_of(reason, REASON_NAMES):
@@ -463,7 +491,9 @@ def problems(result: object, job: dict) -> list[str]:
     return out
 
 
-def merge(builds: dict | None, results: dict[str, object], jobs: list[dict], now: str) -> tuple[dict, list[str]]:
+def merge(
+    builds: dict | None, results: dict[str, object], jobs: list[dict], now: str, log: str | None = None
+) -> tuple[dict, list[str]]:
     """data/builds.json with the valid results in, each dated by this job: one entry per (package, target), the
     newest release's."""
     notes = []
@@ -481,7 +511,7 @@ def merge(builds: dict | None, results: dict[str, object], jobs: list[dict], now
         if bad:
             notes.append(f"{label}: rejected ({'; '.join(bad)})")
             continue
-        current[(canonical(job["name"]), job["target"])] = {**result, "date": now}
+        current[(canonical(job["name"]), job["target"])] = {**result, "date": now, "log": log}
     ordered = sorted(current.values(), key=lambda r: (canonical(r["name"]), r["target"]))
     targets = {label: {k: v for k, v in spec.items() if k in ("runner", "python")} for label, spec in TARGETS.items()}
     return {"schema": SCHEMA, "updated": now, "targets": targets, "results": ordered}, notes
@@ -505,7 +535,10 @@ def cmd_merge(args: argparse.Namespace) -> int:
         result = read_result(results_dir / f"result-{job['id']}" / "result.json")
         if result is not None:
             results[job["id"]] = result
-    merged, notes = merge(builds, results, jobs, today())
+    # The run's own URL, from the merge job's environment (never from a result file).
+    server, repo, run = (os.environ.get(k, "") for k in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"))
+    log = f"{server}/{repo}/actions/runs/{run}" if server == "https://github.com" and repo and run.isdigit() else None
+    merged, notes = merge(builds, results, jobs, today(), log)
     for note in notes:
         print(f"::warning::build_lab: {note!r}")
     text = json.dumps(merged, indent=1) + "\n"
@@ -524,6 +557,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("coverage")
     p.add_argument("builds")
     p.add_argument("--max", type=int, default=DEFAULT_MAX)
+    p.add_argument("--top", type=int, help="only packages ranked this high")
+    p.add_argument("--refresh", action="store_true", help="rebuild recent results too")
     p.add_argument("--github-output")
     p.set_defaults(func=cmd_plan)
     r = sub.add_parser("run")
