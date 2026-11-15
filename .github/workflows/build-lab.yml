@@ -7,7 +7,10 @@ name: Build lab
 #
 # The build jobs run each package's own build code, so they get a read-only token and no secrets, and their result
 # files are untrusted: the merge job, the only one that can write, takes a result only if it is exactly what
-# build_lab.py writes, for exactly the package, version and target the plan gave that job.
+# build_lab.py writes, for the package, version and target the plan gave that job, and dates it itself. What it can't
+# rule out: build code has the runner's admin rights, so it could in principle read the job's artifact token and
+# upload a well-formed result under another job's name. Results are published as a lab's dated observations, and
+# nothing is ever installed from them. Don't add actions/cache to this workflow.
 
 on:
   schedule:
@@ -25,7 +28,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-lab
+  # Pull requests get their own group, so a pull request's run can never cancel the weekly one.
+  group: build-lab-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
   cancel-in-progress: false
 
 jobs:
@@ -106,13 +110,15 @@ jobs:
           TARGET: ${{ matrix.target }}
           RUNNER: ${{ matrix.runner }}
         run: |
-          docker run --rm -v "$PWD:/lab" -w /lab -e NAME -e VERSION -e TARGET -e RUNNER "$IMAGE" sh -c \
-            'apk add --no-cache build-base >/dev/null && python scripts/build_lab.py run --name "$NAME" --version "$VERSION" --target "$TARGET" --runner "$RUNNER" --out result.json'
+          # The checkout is mounted read-only; the result goes to its own folder.
+          mkdir -p "$RUNNER_TEMP/out"
+          docker run --rm -v "$PWD:/lab:ro" -v "$RUNNER_TEMP/out:/out" -w /lab -e NAME -e VERSION -e TARGET -e RUNNER "$IMAGE" sh -c \
+            'apk add --no-cache build-base >/dev/null && python scripts/build_lab.py run --name "$NAME" --version "$VERSION" --target "$TARGET" --runner "$RUNNER" --out /out/result.json'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: result-${{ matrix.id }}
-          path: result.json
+          path: ${{ runner.temp }}/out/result.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -137,7 +143,7 @@ jobs:
           python3 scripts/build_lab.py merge data/builds.json results "$RUNNER_TEMP/plan.json"
       - name: Show what would be committed
         if: github.event_name == 'pull_request'
-        run: git diff --stat -- data/builds.json; python3 -c "import json; [print(r['name'], r['version'], r['target'], r['outcome'], r['seconds'], r['import'], r['gil'], r['reason']) for r in json.load(open('data/builds.json'))['results']]"
+        run: git diff --stat -- data/builds.json; python3 -c "import json; [print(r['name'], r['version'], r['target'], r['outcome'], r['seconds'], r['wheel'], r['extensions'], r['import'], r['gil'], r['reason']) for r in json.load(open('data/builds.json'))['results']]"
       - name: Commit only data/builds.json, retrying if main moved
         if: github.event_name != 'pull_request'
         run: |
