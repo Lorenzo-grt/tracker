@@ -7,7 +7,8 @@ Writes <out>/<name>.json for each package (name canonicalised as in PEP 503), <o
 Pyodide release behind each Python's `bundled` results. Each package file carries the package's
 current notes from notes_dir (default: the repository's notes/), for its bundled cells the
 version Pyodide ships (read from the committed lock files, see pyodide_locks.py), and the build lab's
-results for it from data/builds.json (see build_lab.py), each for the release it built. Runs at
+results for it from data/builds.json (see build_lab.py), each for the release it built; lab.json next
+to it has the lab's results for each package's current release only, for the homepage. Runs at
 publish time, so the files are never committed.
 """
 
@@ -72,6 +73,7 @@ def build(
         sys.exit(f"build_lookup: coverage.json schema {scan.get('schema')!r}, expected {SCAN_SCHEMA}")
     notes = check_notes.load(notes_dir, scan) if notes_dir is not None else {}
     lab = lab_results(builds_path)
+    current: list[dict] = []
     labels = [t["label"] for t in scan["targets"]]
     found = pyodide_locks.releases(scan, root)
     per_target = pyodide_locks.pyodide_targets(scan["targets"], found)
@@ -100,6 +102,9 @@ def build(
             ],
             "builds": sorted(lab.get(name, []), key=lambda r: r["target"]),
         })
+        for r in lab.get(name, []):
+            if r["version"] == p["version"]:  # the homepage shows only the current release's results
+                current.append({"name": name, "rank": p["rank"], **r})
     write_json(out.with_suffix(".json"), {
         "schema": SCHEMA,
         "generated": scan["generated"],
@@ -107,6 +112,12 @@ def build(
         "targets": scan["targets"],
         "packages": index,
     })
+    if builds_path is not None and builds_path.is_file():
+        write_json(out.parent / "lab.json", {
+            "schema": SCHEMA,
+            "generated": scan["generated"],
+            "results": sorted(current, key=lambda r: (r["target"], r["rank"])),
+        })
     write_json(out.parent / "pyodide.json", {
         "schema": SCHEMA,
         "generated": scan["generated"],

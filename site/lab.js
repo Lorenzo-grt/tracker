@@ -2,9 +2,9 @@
 // The build lab section: reads data/builds.json (scripts/build_lab.py) and shows, for packages with no wheel on a
 // platform, whether they build from source there and work. Everything from the file goes in as text, never HTML.
 (function () {
-  const ORDER = ["gil", "fails", "broken", "partial", "slow", "works"];
-  const PILL = { works: "s-wheel", gil: "s-source", partial: "s-source", slow: "s-source", broken: "s-missing", fails: "s-missing" };
-  const LABEL = { works: "works", gil: "GIL back on", partial: "no compiled part", broken: "doesn't import", fails: "fails", slow: "too slow" };
+  const ORDER = ["gil", "fails", "broken", "partial", "slow", "works", "pure"];
+  const PILL = { works: "s-wheel", gil: "s-source", pure: "s-none", partial: "s-source", slow: "s-source", broken: "s-missing", fails: "s-missing" };
+  const LABEL = { works: "works", gil: "GIL back on", pure: "pure Python", partial: "no compiled part", broken: "won't load", fails: "fails", slow: "too slow" };
   const el = (tag, attrs = {}, ...kids) => {
     const e = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
@@ -17,7 +17,7 @@
   };
   const safeName = (n) => /^[A-Za-z0-9._-]{1,100}$/.test(n);
 
-  fetch("data/builds.json")
+  fetch("data/lab.json") // the lab's results for each package's current release (scripts/build_lookup.py)
     .then((r) => (r.ok ? r.json() : null))
     .then((data) => {
       const results = (data && Array.isArray(data.results) ? data.results : []).filter((r) => safeName(r.name));
@@ -28,8 +28,8 @@
       document.getElementById("lab-note").textContent =
         `Each week, the most-downloaded packages that have no wheel for a platform are built from their source on that platform, ` +
         `on GitHub's own runners, the way pip would, then installed and imported. Those runners come with compilers and many system libraries preinstalled, so a build that works there can still need setup on your machine. On free-threaded Python, the lab also checks ` +
-        `whether importing the package turned the GIL back on. Nothing built is published. ${results.length} results, ` +
-        `updated ${data.updated}.`;
+        `whether importing the package turned the GIL back on. Nothing built is published. ${results.length} results for ` +
+        `packages' current releases, the latest from ${results.map((r) => r.date).sort().at(-1)}.`;
       document.getElementById("lab-summary").replaceChildren(
         ...targets.map((t) =>
           el("li", {},

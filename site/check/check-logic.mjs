@@ -235,17 +235,15 @@ export function nextSteps(pythons, platforms) {
 export function labVerdict(r) {
   const mins = (s) => (s < 90 ? `${s} s` : `${Math.round(s / 60)} min`);
   if (r.outcome === "timeout") return { kind: "slow", text: `didn't finish building in ${mins(r.seconds)}` };
-  if (r.outcome === "failed") return { kind: "fails", text: `fails to build: ${r.reason}` };
+  if (r.outcome === "failed") return { kind: "fails", text: r.reason === "other" ? "fails to build" : `fails to build: ${r.reason}` };
   if (r.import === "deps-failed") return { kind: "broken", text: `builds in ${mins(r.seconds)}, but its dependencies don't install` };
   if (r.import !== "ok") return { kind: "broken", text: `builds in ${mins(r.seconds)}, but doesn't import` };
   if (!r.extensions) {
-    const pure = /-none-any$/.test(r.wheel || "");
-    return {
-      kind: "partial",
-      text: pure
-        ? `builds in ${mins(r.seconds)}, but only as pure Python (its compiled part was skipped)`
-        : `builds in ${mins(r.seconds)}, with no compiled extension module`,
-    };
+    // The lab can't tell a pure-Python package (docopt) from an optional extension that was skipped.
+    if (/-none-any$/.test(r.wheel || "")) {
+      return { kind: "pure", text: `builds in ${mins(r.seconds)} as pure Python, with no compiled extension module (if it has an optional one, that was skipped)` };
+    }
+    return { kind: "partial", text: `builds in ${mins(r.seconds)}, but with no compiled extension module` };
   }
   if (r.gil === "re-enabled") return { kind: "gil", text: `builds in ${mins(r.seconds)}, but importing it turns the GIL back on` };
   return { kind: "works", text: `builds from source in ${mins(r.seconds)} and imports${r.gil === "kept-off" ? ", GIL stays off" : ""}` };

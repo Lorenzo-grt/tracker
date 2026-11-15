@@ -203,6 +203,11 @@ class BuildLookupTests(TempDir):
         self.assertEqual(set(one["builds"][0]), set(build_lookup.BUILD_FIELDS))
         self.assertEqual((one["builds"][0]["gil"], one["builds"][0]["seconds"]), ("re-enabled", 87))
         self.assertEqual(json.loads((out / "other.json").read_text(encoding="utf-8"))["builds"], [])
+        # lab.json, for the homepage, has only current releases' results: an older release's result is left out.
+        lab["results"].append(dict(lab["results"][0], name="other", version="0.9"))
+        build_lookup.build(self.write("coverage.json", data), out, builds_path=self.write("builds.json", lab))
+        summary = json.loads((self.root / "lab.json").read_text(encoding="utf-8"))
+        self.assertEqual([(r["name"], r["version"]) for r in summary["results"]], [("typing-extensions", "1.0")])
 
     def test_index_lists_every_package_and_the_targets(self):
         out = self.root / "packages"

@@ -18,7 +18,7 @@ const STAGES = {
   checking: "Checking every package…",
 };
 const SHOWN = 60;
-const LAB_SHORT = { works: "builds ✓", gil: "builds, GIL on", partial: "no compiled part", broken: "doesn't import", fails: "won't build", slow: "too slow" };
+const LAB_SHORT = { works: "builds ✓", gil: "builds, GIL on", pure: "builds, pure Python", partial: "no compiled part", broken: "builds, won't load", fails: "won't build", slow: "too slow" };
 const LAB_LOOKUPS = 120;
 
 // The tracker's build lab results for the gap rows' packages, from its own per-package files (same origin).
@@ -335,7 +335,8 @@ function renderTable() {
     : rows.length
       ? `${rows.length} package${rows.length === 1 ? "" : "s"}. The fix column names the lowest newer release with a wheel for every gap that has one, without losing a wheel elsewhere.`
       : "None: every package installs from a wheel here.";
-  if (rows.length && Object.values(state.lab).some((b) => b.length)) {
+  const shownLab = rows.some((row) => labels.some((t) => row.statuses[t.label] === "source" && labFor(state.lab[canonicalName(row.name)], row.version, t.label)));
+  if (shownLab) {
     $("gaps-note").textContent += " Under a source build, what the tracker's build lab saw building that release from source on GitHub's runners, which have compilers and many system libraries preinstalled (hover for details).";
   }
   const shown = state.showAll ? rows : rows.slice(0, SHOWN);

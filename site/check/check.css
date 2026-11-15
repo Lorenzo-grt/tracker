@@ -66,4 +66,5 @@
 .lab { display: block; margin-top: 3px; font: 0.72rem var(--mono); white-space: nowrap; cursor: help; }
 .lab-works { color: var(--wheel); }
 .lab-gil, .lab-partial, .lab-slow { color: var(--source); }
+.lab-pure { color: var(--muted); }
 .lab-broken, .lab-fails { color: var(--missing); }

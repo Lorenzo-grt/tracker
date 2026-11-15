@@ -109,12 +109,14 @@ test("build lab verdicts never call a wheel without an extension module a workin
   assert.deepEqual(v({}), { kind: "works", text: "builds from source in 87 s and imports" });
   assert.equal(v({ gil: "kept-off", seconds: 289 }).text, "builds from source in 5 min and imports, GIL stays off");
   assert.equal(v({ gil: "re-enabled" }).kind, "gil");
-  assert.equal(v({ extensions: 0, wheel: "py3-none-any" }).kind, "partial");
-  assert.match(v({ extensions: 0, wheel: "py3-none-any" }).text, /only as pure Python/);
+  // A pure-Python wheel: the lab can't tell a package with no compiled part (docopt) from a skipped optional one.
+  assert.equal(v({ extensions: 0, wheel: "py3-none-any" }).kind, "pure");
+  assert.match(v({ extensions: 0, wheel: "py3-none-any" }).text, /as pure Python, with no compiled extension module \(if it has an optional one, that was skipped\)/);
   assert.equal(v({ extensions: 0 }).kind, "partial");
   assert.equal(v({ import: "failed" }).kind, "broken");
   assert.equal(v({ import: "deps-failed" }).kind, "broken");
   assert.deepEqual(v({ outcome: "failed", reason: "needs OpenSSL", import: null, wheel: null, extensions: null }),
     { kind: "fails", text: "fails to build: needs OpenSSL" });
+  assert.equal(v({ outcome: "failed", reason: "other" }).text, "fails to build");
   assert.equal(v({ outcome: "timeout", seconds: 2400 }).text, "didn't finish building in 40 min");
 });

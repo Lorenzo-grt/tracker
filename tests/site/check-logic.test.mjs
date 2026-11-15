@@ -164,7 +164,8 @@ test("the checker's lab verdicts match the tracker's", async () => {
   const base = { outcome: "built", seconds: 87, wheel: "cp314-cp314-win_arm64", extensions: 1, import: "ok", gil: null, reason: null };
   const cases = [
     {}, { gil: "kept-off", seconds: 289 }, { gil: "re-enabled" }, { extensions: 0, wheel: "py3-none-any" }, { extensions: 0 },
-    { import: "failed" }, { import: "deps-failed" }, { outcome: "failed", reason: "needs OpenSSL" }, { outcome: "timeout", seconds: 2400 },
+    { import: "failed" }, { import: "deps-failed" }, { outcome: "failed", reason: "needs OpenSSL" }, { outcome: "failed", reason: "other" },
+    { outcome: "timeout", seconds: 2400 },
   ];
   for (const c of cases) assert.deepEqual(labVerdict({ ...base, ...c }), site.labVerdict({ ...base, ...c }), JSON.stringify(c));
 });
