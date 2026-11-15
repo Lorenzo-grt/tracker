@@ -144,6 +144,10 @@ function needsIndex(path) {
 }
 
 function hideResultSections(hidden, keepSetup = false) {
+  if (hidden) {
+    $("next").hidden = true;
+    $("verdict").closest("section").classList.remove("clean");
+  }
   for (const id of ["targets-title", "gaps-title", "next-title"]) $(id).closest("section").hidden = hidden;
   $("setup-title").closest("section").hidden = hidden && !keepSetup;
 }
