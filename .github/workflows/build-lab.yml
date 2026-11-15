@@ -1,0 +1,155 @@
+name: Build lab
+
+# Weekly: for the most-downloaded packages whose current release has no wheel for Windows on ARM, free-threaded
+# Python or Alpine ARM, build the package from its PyPI sdist on that platform, as pip would, then install and import
+# it (and on free-threaded Python, check the GIL stays off). The results go to data/builds.json; nothing built is
+# kept. See scripts/build_lab.py.
+#
+# The build jobs run each package's own build code, so they get a read-only token and no secrets, and their result
+# files are untrusted: the merge job, the only one that can write, takes a result only if it is exactly what
+# build_lab.py writes, for exactly the package, version and target the plan gave that job.
+
+on:
+  schedule:
+    - cron: "41 4 * * 0" # Sundays
+  pull_request:
+    # A pull request that changes the lab runs a small batch and checks the merge, without committing anything.
+    paths: [".github/workflows/build-lab.yml", "scripts/build_lab.py"]
+  workflow_dispatch:
+    inputs:
+      max:
+        description: Most builds this run
+        default: "40"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-lab
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      hosted: ${{ steps.plan.outputs.hosted }}
+      hosted_count: ${{ steps.plan.outputs.hosted_count }}
+      docker: ${{ steps.plan.outputs.docker }}
+      docker_count: ${{ steps.plan.outputs.docker_count }}
+      all: ${{ steps.plan.outputs.all }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          MAX: ${{ github.event_name == 'pull_request' && '8' || inputs.max || '40' }}
+        run: python3 scripts/build_lab.py plan data/coverage.json data/builds.json --max "$MAX" --github-output "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.hosted_count != '0'
+    name: ${{ matrix.name }} ${{ matrix.version }} (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.hosted) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build, install and import
+        shell: bash
+        env:
+          NAME: ${{ matrix.name }}
+          VERSION: ${{ matrix.version }}
+          TARGET: ${{ matrix.target }}
+          RUNNER: ${{ matrix.runner }}
+        run: python scripts/build_lab.py run --name "$NAME" --version "$VERSION" --target "$TARGET" --runner "$RUNNER" --out result.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: result-${{ matrix.id }}
+          path: result.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build-docker:
+    # JavaScript actions can't run inside an Alpine container on ARM runners, so the build runs in `docker run`.
+    needs: plan
+    if: needs.plan.outputs.docker_count != '0'
+    name: ${{ matrix.name }} ${{ matrix.version }} (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.docker) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build, install and import (with Alpine's build-base installed)
+        env:
+          IMAGE: ${{ matrix.image }}
+          NAME: ${{ matrix.name }}
+          VERSION: ${{ matrix.version }}
+          TARGET: ${{ matrix.target }}
+          RUNNER: ${{ matrix.runner }}
+        run: |
+          docker run --rm -v "$PWD:/lab" -w /lab -e NAME -e VERSION -e TARGET -e RUNNER "$IMAGE" sh -c \
+            'apk add --no-cache build-base >/dev/null && python scripts/build_lab.py run --name "$NAME" --version "$VERSION" --target "$TARGET" --runner "$RUNNER" --out result.json'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: result-${{ matrix.id }}
+          path: result.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  merge:
+    needs: [plan, build, build-docker]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: result-*
+          path: results
+      - name: Merge the results that check out
+        env:
+          PLAN: ${{ needs.plan.outputs.all }}
+        run: |
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan.json"
+          python3 scripts/build_lab.py merge data/builds.json results "$RUNNER_TEMP/plan.json"
+      - name: Show what would be committed
+        if: github.event_name == 'pull_request'
+        run: git diff --stat -- data/builds.json; python3 -c "import json; [print(r['name'], r['version'], r['target'], r['outcome'], r['seconds'], r['import'], r['gil'], r['reason']) for r in json.load(open('data/builds.json'))['results']]"
+      - name: Commit only data/builds.json, retrying if main moved
+        if: github.event_name != 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/builds.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Build lab $(date -u +%Y-%m-%d)"
+          for attempt in 1 2 3 4 5; do
+            git push && exit 0
+            sleep $((attempt * 10))
+            git pull --rebase origin main
+          done
+          echo "couldn't push the build lab's results after 5 attempts" >&2
+          exit 1
