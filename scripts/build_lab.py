@@ -14,9 +14,10 @@
   wheel's shallowest modules, which must work (a module that needs one from outside the wheel, an optional or
   undeclared dependency missing on every platform alike, is left out), and, in a fresh interpreter, every extension
   module it can (optional backends, test helpers and ctypes libraries named like modules may fail: at least one must
-  load). On a free-threaded Python it records whether those turned the GIL back on. A download or resolution
-  failure, a wheel with nothing it could import, or a check that crashed writes no result, so it's retried next time
-  instead of recorded as a failure. Nothing it builds is kept or published.
+  load; any other failure, a crash or a timeout there is recorded as a failure). On a free-threaded Python it
+  records whether either check turned the GIL back on. A download or resolution failure, a wheel with nothing it
+  could import, or a check that exits without an answer writes no result, so it's retried next time instead of
+  recorded as a failure. Nothing it builds is kept or published.
 - merge (our code only, the one job that can write) accepts a result only if it is exactly what run writes, for the
   pair the plan assigned to that job, and dates it itself. Then it updates data/builds.json.
 
@@ -344,21 +345,25 @@ with open(sys.argv[2], encoding="utf-8") as f:
 modules, packages = set(wheel["modules"]), set(wheel["packages"])
 paths = sysconfig.get_paths()
 real = lambda p: os.path.normcase(os.path.realpath(p))
-stdlib = [real(paths[k]) for k in ("stdlib", "platstdlib")]
 installed = [real(paths[k]) for k in ("purelib", "platlib")]
 
 def own(name):
     parts = name.split(".")
     return name in modules or any(".".join(parts[:i]) in packages for i in range(1, len(parts) + 1))
 
-def in_stdlib(e):
-    tb = e.__traceback__
-    while tb and tb.tb_next:
-        tb = tb.tb_next
-    if tb is None:
-        return False
-    f = real(tb.tb_frame.f_code.co_filename)
-    return any(f.startswith(d + os.sep) for d in stdlib) and not any(f.startswith(d + os.sep) for d in installed)
+def interpreters_own(e):
+    # Somewhere in the chain, one of the interpreter's own modules failed to load (_tkinter without libtk): an
+    # ImportError named for a stdlib module, from outside site-packages. Named, not by path: on Windows the stdlib's
+    # extension modules are in DLLs, not Lib.
+    seen = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, ImportError) and e.name and e.name.split(".")[0] in sys.stdlib_module_names:
+            where = real(e.path) if e.path else ""
+            if not any(where.startswith(d + os.sep) for d in installed):
+                return True
+        e = e.__cause__ or e.__context__
+    return False
 
 def excused(e):
     if isinstance(e, ModuleNotFoundError) and e.name:
@@ -372,7 +377,7 @@ def excused(e):
         return True  # a ctypes library named like an extension module
     if isinstance(e, SystemError) and "failed without raising an exception" in text:
         return True  # the same, on Windows
-    return isinstance(e, ImportError) and in_stdlib(e)
+    return interpreters_own(e)
 
 module = None
 loaded = []

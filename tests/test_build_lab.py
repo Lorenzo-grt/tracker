@@ -293,6 +293,10 @@ class Helpers(unittest.TestCase):
             "noname.py": "raise ModuleNotFoundError('no name given')\n",
             "linkerr.py": "raise ImportError('undefined symbol: foo')\n",
             "ctypeslib.py": "raise ImportError('dynamic module does not define module export function (PyInit_ctypeslib)')\n",
+            # matplotlib's Tk backend on Alpine: _tkinter can't load libtk, and the backend's init fails with it.
+            "tkshape.py": "try:\n    raise ImportError('Error loading shared library libtk8.6.so', name='_tkinter',"
+            " path='/usr/local/lib/python3.14/lib-dynload/_tkinter.so')\n"
+            "except ImportError as e:\n    raise ImportError('initialization failed') from e\n",
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -301,7 +305,7 @@ class Helpers(unittest.TestCase):
                 (root / name).write_text(text)
             names = root / "names.json"
             names.write_text(json.dumps({"modules": ["good.opt", "_ext", "clib", "osonly", "noname",
-                                                     "linkerr", "ctypeslib"],
+                                                     "linkerr", "ctypeslib", "tkshape"],
                                          "packages": ["good", "lost", "zope.interface"]}))  # fmt: skip
 
             def run(mode, *modules):
@@ -317,7 +321,8 @@ class Helpers(unittest.TestCase):
             self.assertEqual(run("top", "osonly")[0], 1)  # a stdlib module missing here fails here
             self.assertEqual(run("top", "noname")[0], 1)
             self.assertEqual(run("top", "ctypeslib")[0], 1)
-            self.assertEqual(run("extensions", "osonly", "ctypeslib", "clib", "_ext"), (0, ["_ext"]))
+            self.assertEqual(run("extensions", "osonly", "ctypeslib", "clib", "tkshape", "_ext"), (0, ["_ext"]))
+            self.assertEqual(run("top", "tkshape")[0], 1)
             self.assertEqual(run("extensions", "_ext", "linkerr")[0], 1)
             self.assertEqual(run("extensions", "_ext", "lost")[0], 1)
 
