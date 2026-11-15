@@ -27,7 +27,7 @@
       const count = (t, kind) => rows.filter((x) => x.r.target === t && x.v.kind === kind).length;
       document.getElementById("lab-note").textContent =
         `Each week, the most-downloaded packages that have no wheel for a platform are built from their source on that platform, ` +
-        `on GitHub's own runners, the way pip would, then installed and imported. On free-threaded Python, the lab also checks ` +
+        `on GitHub's own runners, the way pip would, then installed and imported. Those runners come with compilers and many system libraries preinstalled, so a build that works there can still need setup on your machine. On free-threaded Python, the lab also checks ` +
         `whether importing the package turned the GIL back on. Nothing built is published. ${results.length} results, ` +
         `updated ${data.updated}.`;
       document.getElementById("lab-summary").replaceChildren(

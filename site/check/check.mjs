@@ -336,7 +336,7 @@ function renderTable() {
       ? `${rows.length} package${rows.length === 1 ? "" : "s"}. The fix column names the lowest newer release with a wheel for every gap that has one, without losing a wheel elsewhere.`
       : "None: every package installs from a wheel here.";
   if (rows.length && Object.values(state.lab).some((b) => b.length)) {
-    $("gaps-note").textContent += " Under a source build, what the tracker's build lab saw building that release from source on GitHub's runners (hover for details).";
+    $("gaps-note").textContent += " Under a source build, what the tracker's build lab saw building that release from source on GitHub's runners, which have compilers and many system libraries preinstalled (hover for details).";
   }
   const shown = state.showAll ? rows : rows.slice(0, SHOWN);
   const head = el("thead", {}, el("tr", {},
