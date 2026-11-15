@@ -10,10 +10,13 @@
   but no wheel for a lab target, skipping pairs built recently, and prints the build matrix.
 - run, in a job that runs the package's own build code, first checks that the interpreter really is the target's,
   then builds only that package from its PyPI sdist the way pip does when there's no wheel (`pip wheel --no-binary
-  NAME`: build dependencies still come as wheels). It records the wheel it got, installs it, imports every extension
-  module in it (or, for a wheel without any, its top-level modules) and, on a free-threaded Python, whether that turned
-  the GIL back on. A download or resolution failure writes no result, so it's retried next time instead of recorded
-  as a failed build. Nothing it builds is kept or published.
+  NAME`: build dependencies still come as wheels). It records the wheel it got and installs it. Then it imports the
+  wheel's shallowest modules, which must work (a module that needs one from outside the wheel, an optional or
+  undeclared dependency missing on every platform alike, is left out), and, in a fresh interpreter, every extension
+  module it can (optional backends, test helpers and ctypes libraries named like modules may fail: at least one must
+  load). On a free-threaded Python it records whether those turned the GIL back on. A download or resolution
+  failure, a wheel with nothing it could import, or a check that crashed writes no result, so it's retried next time
+  instead of recorded as a failure. Nothing it builds is kept or published.
 - merge (our code only, the one job that can write) accepts a result only if it is exactly what run writes, for the
   pair the plan assigned to that job, and dates it itself. Then it updates data/builds.json.
 
@@ -180,14 +183,21 @@ def today() -> str:
 
 
 def plan(
-    coverage: dict, builds: dict | None, limit: int, now: str, top: int | None = None, refresh: bool = False
+    coverage: dict,
+    builds: dict | None,
+    limit: int,
+    now: str,
+    top: int | None = None,
+    refresh: bool = False,
+    only: set[str] | None = None,
 ) -> list[dict]:
     """The pairs to build, most-downloaded first and taking turns between the lab targets, at most `limit`; with
-    `top`, only packages ranked that high (a census of the top N); with `refresh`, recent results are rebuilt too."""
+    `top`, only packages ranked that high (a census of the top N); with `refresh`, recent results are rebuilt too;
+    with `only` (canonical names), just those packages, recent results included."""
     labels = [t["label"] for t in coverage["targets"]]
     recent = set()
     cutoff = dt.date.fromisoformat(now) - dt.timedelta(days=REFRESH_DAYS)
-    for r in [] if refresh else (builds or {}).get("results", []):
+    for r in [] if refresh or only else (builds or {}).get("results", []):
         if dt.date.fromisoformat(r["date"]) >= cutoff:
             recent.add((canonical(r["name"]), r["version"], r["target"]))
     queues: dict[str, list[dict]] = {t: [] for t in TARGETS}
@@ -198,6 +208,8 @@ def plan(
         if p.get("error") or not isinstance(name, str) or not isinstance(version, str):
             continue
         if not NAME.fullmatch(name) or not VERSION.fullmatch(version):
+            continue
+        if only is not None and canonical(name) not in only:
             continue
         for target in TARGETS:
             if target not in labels or p["results"][labels.index(target)] != "source":
@@ -222,7 +234,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
     coverage = json.loads(Path(args.coverage).read_text(encoding="utf-8"))
     builds_path = Path(args.builds)
     builds = json.loads(builds_path.read_text(encoding="utf-8")) if builds_path.exists() else None
-    jobs = plan(coverage, builds, args.max, today(), args.top, args.refresh)
+    only = {canonical(n) for n in args.only.split(",") if n.strip()} if args.only else None
+    jobs = plan(coverage, builds, args.max, today(), args.top, args.refresh, only)
     hosted = [j for j in jobs if "image" not in j]
     docker = [j for j in jobs if "image" in j]
     print(
@@ -270,9 +283,9 @@ def wheel_tag(wheel: Path) -> str:
     return "-".join(wheel.name[: -len(".whl")].split("-")[-3:]).lower()
 
 
-def wheel_modules(wheel: Path) -> tuple[list[str], int]:
-    """What to import from a wheel: every extension module, by its dotted name, and how many there are. A wheel with
-    none (pure Python) gets its shallowest packages and modules instead, namespace packages included."""
+def wheel_modules(wheel: Path) -> tuple[list[str], list[str], int]:
+    """What to import from a wheel: its shallowest packages and modules (namespace packages included, tests left out),
+    its extension modules by dotted name, and how many extension modules there are."""
     with zipfile.ZipFile(wheel) as z:
         entries = [e for e in z.namelist() if not e.split("/", 1)[0].endswith((".dist-info", ".data"))]
     dotted = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", re.ASCII)
@@ -284,9 +297,7 @@ def wheel_modules(wheel: Path) -> tuple[list[str], int]:
             name = ".".join([*parts[:-1], parts[-1].split(".", 1)[0]])
             if dotted.fullmatch(name):
                 extensions.append(name)
-    if extensions:
-        return sorted(set(extensions))[:MAX_EXTENSIONS], len(set(extensions))
-    modules = set()
+    modules = {e for e in extensions if not any(p in ("tests", "test") for p in e.split("."))}
     for e in entries:
         if not e.endswith(".py"):
             continue
@@ -297,22 +308,55 @@ def wheel_modules(wheel: Path) -> tuple[list[str], int]:
         if parts and dotted.fullmatch(name) and not any(p in ("tests", "test") for p in parts):
             modules.add(name)
     shallow = sorted(modules, key=lambda m: (m.count("."), m))
-    return shallow[:3], 0
+    return shallow[:3], sorted(set(extensions))[:MAX_EXTENSIONS], len(set(extensions))
 
 
+def wheel_names(wheel: Path) -> list[str]:
+    """Every module and package a wheel installs, by dotted name: a missing module with one of these names is the
+    wheel's own, and any other is a dependency."""
+    with zipfile.ZipFile(wheel) as z:
+        entries = [e for e in z.namelist() if not e.split("/", 1)[0].endswith((".dist-info", ".data"))]
+    names = set()
+    for e in entries:
+        parts = e.split("/")
+        if not parts[-1].endswith((".py", ".pyd", ".so")):
+            continue
+        last = parts[-1].split(".", 1)[0]
+        names.update(".".join(parts[:i]) for i in range(1, len(parts)))
+        if last != "__init__":
+            names.add(".".join([*parts[:-1], last]))
+    return sorted(n for n in names if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", n, re.ASCII))
+
+
+# argv: "top" or "extensions", a file listing the wheel's module names (wheel_names), then the modules. "top" must
+# import each module, but leaves out one that needs a module from outside the wheel; "extensions" imports what it can.
 IMPORT_CHECK = """
 import importlib, json, re, sys, warnings
+mode, names = sys.argv[1], sys.argv[3:]
+with open(sys.argv[2], encoding="utf-8") as f:
+    ours = set(f.read().split())
 module = None
+loaded = []
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always")
-    for m in sys.argv[1:]:
-        importlib.import_module(m)
+    for m in names:
+        try:
+            importlib.import_module(m)
+        except ModuleNotFoundError as e:
+            if mode == "top" and (e.name is None or e.name in ours):
+                raise
+            continue
+        except Exception:
+            if mode == "top":
+                raise
+            continue
+        loaded.append(m)
 for w in caught:
     found = re.search(r"has been enabled to load module '([A-Za-z0-9_.]{1,100})'", str(w.message))
     if found and module is None:
         module = found.group(1)
 gil = getattr(sys, "_is_gil_enabled", None)
-print("WHEELGAP-LAB " + json.dumps({"gil_enabled": gil() if gil else None, "module": module}))
+print("WHEELGAP-LAB " + json.dumps({"gil_enabled": gil() if gil else None, "module": module, "loaded": loaded}))
 """
 GIL_MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,9}", re.ASCII)
 
@@ -356,7 +400,9 @@ def run_build(name: str, version: str, target: str, work: Path) -> dict | None:
             return None
         return {"outcome": "failed", "seconds": seconds, "wheel": None, "extensions": None, "import": None,
                 "gil": None, "gil_module": None, "reason": classify(log), "excerpt": excerpt(log)}  # fmt: skip
-    modules, extensions = wheel_modules(built[0])
+    modules, extension_modules, extensions = wheel_modules(built[0])
+    ours = work / "wheel-modules.txt"
+    ours.write_text("\n".join(wheel_names(built[0])), encoding="utf-8")
     result = {"outcome": "built", "seconds": seconds, "wheel": wheel_tag(built[0]), "extensions": extensions,
               "import": None, "gil": None, "gil_module": None, "reason": None, "excerpt": ""}  # fmt: skip
     install = [sys.executable, "-m", "pip", "install", "--no-cache-dir", str(built[0])]
@@ -369,25 +415,51 @@ def run_build(name: str, version: str, target: str, work: Path) -> dict | None:
         print((i.stdout + i.stderr)[-3000:] if i else "dependency install timed out")
         result["import"] = "deps-failed"
         return result
-    try:
-        c = subprocess.run([sys.executable, "-c", IMPORT_CHECK, *modules], check=False, capture_output=True,
-                           text=True, errors="replace", timeout=IMPORT_TIMEOUT, cwd=work, env=env)  # fmt: skip
-    except subprocess.TimeoutExpired:
-        c = None
-    line = next((ln for ln in reversed((c.stdout if c else "").splitlines()) if ln.startswith("WHEELGAP-LAB ")), None)
-    if c is None or c.returncode != 0 or line is None or not modules:
-        print((c.stdout + c.stderr)[-3000:] if c else "import timed out")
+    if not modules:
+        print("build_lab: the wheel has nothing to import; not recording this", file=sys.stderr)
+        return None
+    top = _import_check(work, env, "top", ours, modules)
+    if top is None or top[0] != 0 or top[1] is None:
         result["import"] = "failed"
-        result["excerpt"] = excerpt(c.stderr) if c else "import timed out"
+        result["excerpt"] = excerpt(top[2]) if top else "import timed out"
         return result
+    if not top[1]["loaded"]:
+        print("build_lab: every module needs one from outside the wheel; not recording this", file=sys.stderr)
+        return None
+    answer = top[1]
+    if extensions:
+        ext = _import_check(work, env, "extensions", ours, extension_modules)
+        if ext is None or ext[0] != 0 or ext[1] is None or not ext[1]["loaded"]:
+            print("build_lab: no extension module loaded on its own; not recording this", file=sys.stderr)
+            return None
+        answer = ext[1]
     result["import"] = "ok"
     if free_threaded and extensions:
-        answer = json.loads(line.removeprefix("WHEELGAP-LAB "))
         result["gil"] = "re-enabled" if answer["gil_enabled"] else "kept-off"
         module = answer.get("module")
         if result["gil"] == "re-enabled" and isinstance(module, str) and GIL_MODULE.fullmatch(module):
             result["gil_module"] = module  # the module CPython's RuntimeWarning names
     return result
+
+
+def _import_check(work: Path, env: dict, mode: str, ours: Path, modules: list[str]) -> tuple[int, dict | None, str] | None:
+    """Run IMPORT_CHECK in a fresh interpreter: (exit code, its answer or None, stderr), or None if it timed out."""
+    try:
+        c = subprocess.run([sys.executable, "-c", IMPORT_CHECK, mode, str(ours), *modules], check=False, capture_output=True,
+                           text=True, errors="replace", timeout=IMPORT_TIMEOUT, cwd=work, env=env)  # fmt: skip
+    except subprocess.TimeoutExpired:
+        print("import timed out")
+        return None
+    line = next((ln for ln in reversed(c.stdout.splitlines()) if ln.startswith("WHEELGAP-LAB ")), None)
+    if c.returncode != 0 or line is None:
+        print((c.stdout + c.stderr)[-3000:])
+    try:
+        answer = json.loads(line.removeprefix("WHEELGAP-LAB ")) if line else None
+    except ValueError:
+        answer = None
+    if not isinstance(answer, dict) or not isinstance(answer.get("loaded"), list):
+        answer = None
+    return c.returncode, answer, c.stderr
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -561,6 +633,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max", type=int, default=DEFAULT_MAX)
     p.add_argument("--top", type=int, help="only packages ranked this high")
     p.add_argument("--refresh", action="store_true", help="rebuild recent results too")
+    p.add_argument("--only", help="just these packages (comma-separated), recent results included")
     p.add_argument("--github-output")
     p.set_defaults(func=cmd_plan)
     r = sub.add_parser("run")

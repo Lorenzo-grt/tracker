@@ -30,6 +30,9 @@ on:
         description: Rebuild recent results too
         type: boolean
         default: false
+      only:
+        description: Just these packages, comma-separated (recent results included)
+        default: ""
 
 permissions:
   contents: read
@@ -59,7 +62,8 @@ jobs:
           MAX: ${{ github.event_name == 'pull_request' && '8' || inputs.max || '40' }}
           TOP: ${{ inputs.top }}
           REFRESH: ${{ inputs.refresh && '--refresh' || '' }}
-        run: python3 scripts/build_lab.py plan data/coverage.json data/builds.json --max "$MAX" ${TOP:+--top "$TOP"} $REFRESH --github-output "$GITHUB_OUTPUT"
+          ONLY: ${{ inputs.only }}
+        run: python3 scripts/build_lab.py plan data/coverage.json data/builds.json --max "$MAX" ${TOP:+--top "$TOP"} $REFRESH ${ONLY:+--only "$ONLY"} --github-output "$GITHUB_OUTPUT"
 
   build:
     needs: plan

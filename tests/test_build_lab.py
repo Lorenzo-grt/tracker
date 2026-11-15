@@ -1,6 +1,8 @@
 """Offline tests for scripts/build_lab.py: the plan, the merge job's checks on untrusted results, and the helpers."""
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -240,18 +242,20 @@ class Helpers(unittest.TestCase):
                 for name in ["grpc/__init__.py", "grpc/_cython/__init__.py",
                              "grpc/_cython/cygrpc.cpython-314t-x86_64-linux-gnu.so", "grpcio-1.85.1.dist-info/RECORD"]:  # fmt: skip
                     z.writestr(name, "")
-            self.assertEqual(build_lab.wheel_modules(wheel), (["grpc._cython.cygrpc"], 1))
+            self.assertEqual(build_lab.wheel_modules(wheel), (["grpc", "grpc._cython", "grpc._cython.cygrpc"],
+                                                              ["grpc._cython.cygrpc"], 1))  # fmt: skip
+            self.assertEqual(build_lab.wheel_names(wheel), ["grpc", "grpc._cython", "grpc._cython.cygrpc"])
             self.assertEqual(build_lab.wheel_tag(wheel), "cp314-cp314t-linux_x86_64")
             lib = Path(tmp) / "llvmlite-0.50.0-cp314-cp314-linux_x86_64.whl"  # a ctypes library, not a module
             with zipfile.ZipFile(lib, "w") as z:
                 for name in ["llvmlite/__init__.py", "llvmlite/binding/__init__.py", "llvmlite/binding/libllvmlite.so"]:
                     z.writestr(name, "")
-            self.assertEqual(build_lab.wheel_modules(lib), (["llvmlite", "llvmlite.binding"], 0))
+            self.assertEqual(build_lab.wheel_modules(lib), (["llvmlite", "llvmlite.binding"], [], 0))
             win = Path(tmp) / "x-1.0-cp314-cp314-win_arm64.whl"
             with zipfile.ZipFile(win, "w") as z:
                 z.writestr("_x.cp314-win_arm64.pyd", "")
                 z.writestr("y/z.abi3.so", "")
-            self.assertEqual(build_lab.wheel_modules(win), (["_x", "y.z"], 2))
+            self.assertEqual(build_lab.wheel_modules(win), (["_x", "y.z"], ["_x", "y.z"], 2))
             ns = Path(tmp) / "zope.interface-8.7-py3-none-any.whl"  # a namespace package: no top-level __init__
             with zipfile.ZipFile(ns, "w") as z:
                 for name in [
@@ -260,7 +264,43 @@ class Helpers(unittest.TestCase):
                     "zope/interface/tests/t.py",
                 ]:
                     z.writestr(name, "")
-            self.assertEqual(build_lab.wheel_modules(ns), (["zope.interface", "zope.interface.declarations"], 0))
+            self.assertEqual(build_lab.wheel_modules(ns), (["zope.interface", "zope.interface.declarations"], [], 0))
+            # zope.interface's names, not zope.event's: a missing zope.event is a dependency, not the wheel's own.
+            self.assertEqual(build_lab.wheel_names(ns), ["zope", "zope.interface", "zope.interface.declarations",
+                                                         "zope.interface.tests", "zope.interface.tests.t"])  # fmt: skip
+            tests = Path(tmp) / "greenlet-3.3-cp314-cp314t-win_arm64.whl"  # its test extension needs psutil
+            with zipfile.ZipFile(tests, "w") as z:
+                for name in ["greenlet/__init__.py", "greenlet/_greenlet.cp314t-win_arm64.pyd",
+                             "greenlet/tests/_test_extension.cp314t-win_arm64.pyd"]:  # fmt: skip
+                    z.writestr(name, "")
+            self.assertEqual(build_lab.wheel_modules(tests)[0], ["greenlet", "greenlet._greenlet"])
+
+    def test_import_check(self):
+        # The check that runs on the lab's runners, here on fake packages: a module the wheel should have but doesn't
+        # is a failure; one from outside the wheel (an optional or undeclared dependency) is left out.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "good").mkdir()
+            (root / "good" / "__init__.py").write_text("")
+            (root / "good" / "opt.py").write_text("import _cffi_backend_not_here\n")
+            (root / "lost").mkdir()
+            (root / "lost" / "__init__.py").write_text("from . import _speedups\n")
+            (root / "clib.py").write_text("import ruamel_not_here\n")
+            (root / "crash.py").write_text("raise ImportError('libtk8.6.so: No such file')\n")
+            names = root / "names.txt"
+            names.write_text("good\ngood.opt\nlost\nlost._speedups\nclib\ncrash")
+
+            def run(mode, *modules):
+                c = subprocess.run([sys.executable, "-c", build_lab.IMPORT_CHECK, mode, str(names), *modules],
+                                   capture_output=True, text=True, cwd=root, check=False)  # fmt: skip
+                line = [ln for ln in c.stdout.splitlines() if ln.startswith("WHEELGAP-LAB ")]
+                return c.returncode, json.loads(line[0].removeprefix("WHEELGAP-LAB "))["loaded"] if line else None
+
+            self.assertEqual(run("top", "good", "good.opt"), (0, ["good"]))
+            self.assertEqual(run("top", "clib"), (0, []))
+            self.assertEqual(run("top", "lost")[0], 1)
+            self.assertEqual(run("top", "crash")[0], 1)
+            self.assertEqual(run("extensions", "crash", "good.opt", "good", "lost"), (0, ["good"]))
 
     def test_run_refuses_what_the_plan_never_makes_and_a_wrong_interpreter(self):
         self.assertEqual(build_lab.main(["run", "--name", "x; rm", "--version", "1", "--target", "3.14 win-arm64",
@@ -279,6 +319,9 @@ class Census(unittest.TestCase):
         self.assertNotIn(("cryptography", "3.14 win-arm64"), pairs(build_lab.plan(COVERAGE, recent, 50, "2026-11-15")))
         self.assertIn(("cryptography", "3.14 win-arm64"),
                       pairs(build_lab.plan(COVERAGE, recent, 50, "2026-11-15", refresh=True)))  # fmt: skip
+        self.assertEqual(pairs(build_lab.plan(COVERAGE, recent, 50, "2026-11-15", only={"cryptography", "orjson"})),
+                         [("cryptography", "3.14 win-arm64"), ("orjson", "3.14t win-arm64"),
+                          ("orjson", "3.14t linux-x86_64")])  # fmt: skip
 
     def test_unsupported_by_design_and_gil_module(self):
         log = "Getting requirements to build wheel did not run successfully.\nRuntimeError: uvloop does not support Windows at the moment"
