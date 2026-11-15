@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; worker-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net https://pypi.org https://files.pythonhosted.org https://api.github.com https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
   <title>Check a Repo's Wheels</title>
   <meta name="description" content="Paste a GitHub repository: see which of its Python dependencies have no prebuilt wheel for the platforms it ships to, and the release that fixes each one. Runs in your browser.">
   <link rel="stylesheet" href="../style.css">
