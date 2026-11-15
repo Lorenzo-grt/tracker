@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Check a Repo's Wheels</title>
+  <meta name="description" content="Paste a GitHub repository: see which of its Python dependencies have no prebuilt wheel for the platforms it ships to, and the release that fixes each one. Runs in your browser.">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="check.css">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="../apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Will your Python project install everywhere?">
+  <meta property="og:description" content="Paste a GitHub repo: wheelgap finds the dependencies with no prebuilt wheel for your platforms (Linux ARM, Alpine, Windows on ARM, free-threaded Python) and the release that fixes each.">
+  <meta property="og:url" content="https://wheelgap.github.io/tracker/check/">
+  <meta property="og:image" content="https://wheelgap.github.io/tracker/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <script type="module" src="check.mjs"></script>
+</head>
+<body>
+  <header class="wrap">
+    <p class="eyebrow"><a href="https://github.com/wheelgap/wheelgap">wheelgap</a> · <a href="../">tracker</a> · repo check</p>
+    <h1>Will your Python project install everywhere?</h1>
+    <p class="lede">Paste a GitHub repository. wheelgap reads its lockfile, works out the platforms you ship to from your CI and Dockerfiles, and shows every dependency with no prebuilt wheel there (so it's compiled from source, or can't be installed) with the release that fixes it.</p>
+    <form class="search repo-form" id="form">
+      <label for="repo" class="visually-hidden">GitHub repository</label>
+      <input id="repo" name="repo" placeholder="owner/repo or a GitHub URL" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+      <button type="submit" id="go">Check</button>
+    </form>
+    <p class="examples">Try <button type="button" data-repo="fastapi/full-stack-fastapi-template">fastapi/full-stack-fastapi-template</button> <button type="button" data-repo="karpathy/nanochat">karpathy/nanochat</button> <button type="button" data-repo="browser-use/browser-use">browser-use/browser-use</button></p>
+    <p class="meta" id="status" role="status" aria-live="polite">Starting Python in your browser…</p>
+  </header>
+
+  <main class="wrap" id="out" hidden>
+    <section aria-labelledby="verdict" class="verdict-card">
+      <h2 id="verdict"></h2>
+      <p class="note" id="verdict-detail"></p>
+      <div id="alerts"></div>
+    </section>
+
+    <section aria-labelledby="setup-title">
+      <div class="section-head">
+        <h2 id="setup-title">Targets</h2>
+        <label class="lock-pick" id="lock-pick" hidden>Lockfile <select id="lockfile"></select></label>
+      </div>
+      <p class="note" id="setup-note"></p>
+      <div class="chips" role="group" aria-label="Platforms" id="platform-chips"></div>
+      <div class="chips" role="group" aria-label="Python versions" id="python-chips"></div>
+      <details class="read" id="read">
+        <summary>What was read</summary>
+        <ul id="read-list"></ul>
+      </details>
+    </section>
+
+    <section aria-labelledby="targets-title">
+      <div class="section-head">
+        <h2 id="targets-title">By target</h2>
+        <div class="tabs" role="tablist" aria-label="Python version" id="python-tabs"></div>
+      </div>
+      <p class="note" id="targets-note">Click a platform to list only its gaps.</p>
+      <ol class="platforms" id="platforms"></ol>
+      <p class="legend">
+        <span><i class="sw sw-wheel"></i> wheel</span>
+        <span><i class="sw sw-source"></i> builds from source</span>
+        <span><i class="sw sw-missing"></i> can't install (no wheel, no source)</span>
+      </p>
+    </section>
+
+    <section aria-labelledby="gaps-title">
+      <h2 id="gaps-title">Packages without a wheel</h2>
+      <p class="note" id="gaps-note"></p>
+      <div class="matrix-scroll"><table class="matrix gap-table" id="gap-table"></table></div>
+      <button class="more" id="more" type="button" hidden>Show all</button>
+    </section>
+
+    <section aria-labelledby="next-title" class="cta">
+      <h2 id="next-title">Fix it</h2>
+      <div class="actions">
+        <button type="button" class="action" id="copy-prompt">Copy a fix prompt for your coding agent</button>
+        <button type="button" class="action" id="copy-link">Copy link to this result</button>
+      </div>
+      <p class="note">The prompt lists each bump and how to confirm it. Paste it into Claude Code, Cursor or any agent; with <code>claude mcp add wheelgap -- uvx --from wheelgap wheelgap-mcp</code>, it can check packages itself.</p>
+      <p>Run the same check locally or in CI:</p>
+      <pre><code id="cli"></code></pre>
+      <p class="note">It's the <a href="https://github.com/wheelgap/wheelgap">wheelgap</a> command line, also a <a href="https://github.com/wheelgap/wheelgap/blob/main/docs/ci.md">GitHub Action</a> and a pre-commit hook, so a new gap fails the pull request that adds it.</p>
+      <ul class="caveats" id="caveats"></ul>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    <p>Runs in your browser: Python and wheelgap load from jsDelivr and PyPI, the repo's files come straight from GitHub, and release lists from PyPI. Nothing goes through a server of ours, and only public repos can be read. The first check downloads about 10 MB, cached after that. <a href="../">Wheel coverage of the top 5,000 packages</a> · <a href="https://github.com/wheelgap/tracker/tree/main/site/check">Source</a> · <a href="https://github.com/wheelgap/wheelgap/issues/new?template=bug_report.yml">Report a wrong result</a></p>
+  </footer>
+</body>
+</html>

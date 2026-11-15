@@ -1,0 +1,55 @@
+/* The repo checker, on top of ../style.css (its colour tokens and dark mode, tabs, platform bars and matrix). */
+
+.repo-form { max-width: 640px; margin-top: 22px; }
+.repo-form input { font-family: var(--mono); }
+.examples { margin: 0; color: var(--muted); font-size: 0.88rem; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.examples button, .chip, .action {
+  font: 0.82rem var(--mono); padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--text); cursor: pointer;
+}
+.examples button:hover, .chip:hover, .action:hover { border-color: var(--text); }
+.examples button:focus-visible, .chip:focus-visible, .action:focus-visible, .lock-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#status { min-height: 1.5em; }
+#status.error { color: var(--missing); }
+
+.verdict-card { margin-top: 32px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.verdict-card h2 { font-size: clamp(1.25rem, 3vw, 1.6rem); margin-bottom: 6px; }
+.verdict-card .note { margin-bottom: 0; }
+.verdict-card.clean h2 { color: var(--wheel); }
+.alert { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-size: 0.92rem; }
+.alert.warn { border-color: color-mix(in srgb, var(--source) 55%, var(--line)); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.chip[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.chip .ci { margin-left: 5px; font-size: 0.7rem; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--bg); }
+.chip.shortcut { border-style: dashed; }
+.lock-pick { font-size: 0.88rem; color: var(--muted); display: inline-flex; gap: 8px; align-items: center; }
+.lock-pick select { font: 0.85rem var(--mono); padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); max-width: 60vw; }
+
+.read { margin-top: 10px; font-size: 0.88rem; color: var(--muted); }
+.read summary { cursor: pointer; }
+.read ul { margin: 8px 0 0; padding-left: 18px; }
+.read li { margin: 2px 0; overflow-wrap: anywhere; }
+.read code { color: var(--text); }
+
+.gap-table th:first-child, .gap-table td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+.gap-table { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.gap-table td.pkg { font: 600 0.88rem var(--mono); white-space: nowrap; }
+.gap-table td.pkg a { color: var(--text); text-decoration: none; }
+.gap-table td.pkg a:hover { color: var(--accent); }
+.gap-table td.fix { font: 0.82rem var(--mono); white-space: nowrap; }
+.fix-all { color: var(--wheel); font-weight: 600; }
+.fix-some { color: var(--source); }
+.fix-none, .fix-pending { color: var(--muted); }
+.na { color: var(--muted); }
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.action { font-family: var(--sans); font-size: 0.92rem; padding: 8px 14px; border-radius: var(--radius); }
+.action.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.action.done { border-color: var(--wheel); color: var(--wheel); }
+.caveats { color: var(--muted); font-size: 0.88rem; padding-left: 18px; }
+.caveats li { margin: 4px 0; }
+
+@media (max-width: 640px) {
+  .verdict-card { padding: 16px; }
+}
