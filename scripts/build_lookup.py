@@ -36,6 +36,7 @@ BUILD_FIELDS = (
     "target", "version", "outcome", "seconds", "wheel", "extensions", "import", "gil", "reason", "excerpt",
     "toolchains", "runner", "python", "date",
 )  # fmt: skip
+LAB_EXTRAS = ("gil_module", "log")  # only in lab.json
 
 
 def canonical(name: str) -> str:
@@ -55,7 +56,10 @@ def lab_results(builds_path: Path | None) -> dict[str, list[dict]]:
         sys.exit(f"build_lookup: builds.json schema {data.get('schema')!r}, expected 1")
     out: dict[str, list[dict]] = {}
     for r in data.get("results", []):
-        out.setdefault(canonical(r["name"]), []).append({k: r[k] for k in BUILD_FIELDS})
+        # Package files carry exactly BUILD_FIELDS (wheelgap reads them strictly); the homepage's lab.json also gets
+        # LAB_EXTRAS, from results that have them.
+        entry = {k: r[k] for k in BUILD_FIELDS} | {k: r.get(k) for k in LAB_EXTRAS}
+        out.setdefault(canonical(r["name"]), []).append(entry)
     return out
 
 
@@ -100,7 +104,7 @@ def build(
             "notes": [
                 check_notes.as_json(n) for n in check_notes.current(notes.get(name, []), p, scan["targets"])
             ],
-            "builds": sorted(lab.get(name, []), key=lambda r: r["target"]),
+            "builds": sorted(({k: r[k] for k in BUILD_FIELDS} for r in lab.get(name, [])), key=lambda r: r["target"]),
         })
         for r in lab.get(name, []):
             if r["version"] == p["version"]:  # the homepage shows only the current release's results
