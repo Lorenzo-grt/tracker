@@ -212,10 +212,19 @@ class Helpers(unittest.TestCase):
             self.assertEqual(build_lab.classify(log), reason, log)
 
     def test_fetch_and_resolve_failures_arent_recorded(self):
-        for log in ["ERROR: Could not find a version that satisfies the requirement setuptools>=80",
-                    "ERROR: No matching distribution found for maturin", "Read timed out. (read timeout=15)"]:  # fmt: skip
-            self.assertTrue(build_lab.UNRECORDED.search(log), log)
+        self.assertTrue(build_lab.UNRECORDED.search("Read timed out. (read timeout=15)"))
         self.assertFalse(build_lab.UNRECORDED.search("error: command 'cl.exe' failed with exit code 2"))
+        own = "ERROR: Could not find a version that satisfies the requirement tiktoken==0.14.0 (from versions: none)"
+        self.assertTrue(build_lab.unrecorded(own, "tiktoken", "0.14.0"))
+        dep = "ERROR: Could not find a version that satisfies the requirement setuptools-rust>=1.12"
+        self.assertFalse(build_lab.unrecorded(dep, "tiktoken", "0.14.0"))  # a missing build dependency is recorded
+        self.assertTrue(build_lab.unrecorded("Read timed out.", "tiktoken", "0.14.0"))
+        self.assertEqual(
+            build_lab.classify(
+                "error: subprocess-exited-with-error\ninstalling build dependencies for pyarrow did not run successfully."
+            ),
+            "build dependency failed",
+        )
 
     def test_excerpt_is_short_printable_ascii(self):
         text = build_lab.excerpt("ok\n\x1b[31merror: café failed\x1b[0m\nerror: " + "x" * 1000)
@@ -232,6 +241,16 @@ class Helpers(unittest.TestCase):
                     z.writestr(name, "")
             self.assertEqual(build_lab.wheel_modules(wheel), (["grpc._cython.cygrpc"], 1))
             self.assertEqual(build_lab.wheel_tag(wheel), "cp314-cp314t-linux_x86_64")
+            lib = Path(tmp) / "llvmlite-0.50.0-cp314-cp314-linux_x86_64.whl"  # a ctypes library, not a module
+            with zipfile.ZipFile(lib, "w") as z:
+                for name in ["llvmlite/__init__.py", "llvmlite/binding/__init__.py", "llvmlite/binding/libllvmlite.so"]:
+                    z.writestr(name, "")
+            self.assertEqual(build_lab.wheel_modules(lib), (["llvmlite", "llvmlite.binding"], 0))
+            win = Path(tmp) / "x-1.0-cp314-cp314-win_arm64.whl"
+            with zipfile.ZipFile(win, "w") as z:
+                z.writestr("_x.cp314-win_arm64.pyd", "")
+                z.writestr("y/z.abi3.so", "")
+            self.assertEqual(build_lab.wheel_modules(win), (["_x", "y.z"], 2))
             ns = Path(tmp) / "zope.interface-8.7-py3-none-any.whl"  # a namespace package: no top-level __init__
             with zipfile.ZipFile(ns, "w") as z:
                 for name in [

@@ -113,7 +113,7 @@ REASONS: list[tuple[str, re.Pattern[str]]] = [
     (
         "build dependency failed",
         re.compile(
-            r"installing build dependencies did not run successfully|"
+            r"installing build dependencies( for \S+)? did not run successfully|"
             r"failed to build installable wheels for some pyproject",
             re.IGNORECASE,
         ),
@@ -125,11 +125,29 @@ OTHER = "other"
 REASON_NAMES = frozenset({name for name, _ in REASONS} | {OTHER})
 # pip couldn't fetch or resolve something: not the build's fault, so nothing is recorded.
 UNRECORDED = re.compile(
-    r"Could not find a version that satisfies|No matching distribution found|Max retries exceeded|"
-    r"Read timed out|ConnectionError|Temporary failure in name resolution|HTTP error \d|\b(429|5\d\d) Server Error",
+    r"Max retries exceeded|Read timed out|ConnectionError|Temporary failure in name resolution|HTTP error \d|"
+    r"\b(429|5\d\d) Server Error",
     re.IGNORECASE,
 )
-ERROR_LINE = re.compile(r"error|fatal|not found|failed|could not|not installed|is required", re.IGNORECASE)
+
+
+def unrecorded(log: str, name: str, version: str) -> bool:
+    """Whether a failed build shouldn't be recorded: network trouble anywhere, or pip couldn't find the package's own
+    sdist. A build dependency pip can't find is a real build failure, and is recorded."""
+    own = re.escape(f"{name}=={version}")
+    return bool(UNRECORDED.search(log)) or bool(
+        re.search(
+            rf"(Could not find a version that satisfies the requirement|No matching distribution found for) "
+            rf"{own}(\s|$)",
+            log,
+            re.IGNORECASE,
+        )
+    )
+
+
+ERROR_LINE = re.compile(
+    r"error|fatal|not found|failed|could not|not installed|is required|did not run successfully", re.IGNORECASE
+)
 TOOLCHAINS = ("rustc", "cargo", "gcc", "cl", "cmake")
 NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?", re.ASCII)
 VERSION = re.compile(r"[0-9][0-9A-Za-z.+!_-]{0,39}", re.ASCII)
@@ -247,7 +265,8 @@ def wheel_modules(wheel: Path) -> tuple[list[str], int]:
     dotted = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", re.ASCII)
     extensions = []
     for e in entries:
-        if e.endswith((".so", ".pyd")):
+        tagged = re.search(r"\.(cpython-[^/]+|abi3t?|cp3\d+t?-[^/]+)\.so$", e) is not None
+        if e.endswith(".pyd") or tagged:  # a plain .so is a shared library (llvmlite's, via ctypes), not a module
             parts = e.split("/")
             name = ".".join([*parts[:-1], parts[-1].split(".", 1)[0]])
             if dotted.fullmatch(name):
@@ -311,7 +330,7 @@ def run_build(name: str, version: str, target: str, work: Path) -> dict | None:
     print(log[-6000:])
     built = sorted(wheels.glob("*.whl"))
     if p.returncode != 0 or not built:
-        if UNRECORDED.search(log):
+        if unrecorded(log, name, version):
             print("build_lab: pip couldn't download or resolve something; not recording this", file=sys.stderr)
             return None
         return {"outcome": "failed", "seconds": seconds, "wheel": None, "extensions": None, "import": None,
