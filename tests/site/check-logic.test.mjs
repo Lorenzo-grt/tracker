@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseRepo, rawUrl, pickLockfile, toQuery, fromQuery, sortPythons, freeThreaded, fixFor, rowsFor, headline,
-  cliCommand, fixPrompt, verdictText, nextSteps, validRef,
+  cliCommand, fixPrompt, verdictText, nextSteps, validRef, labVerdict, labFor, canonicalName,
 } from "../../site/check/check-logic.mjs";
 
 test("parseRepo reads the forms people paste", () => {
@@ -156,4 +156,24 @@ test("refs with '..' or empty segments are refused", () => {
   for (const bad of ["..", "a/../b", "a//b", "/a", "a/", ".", "a b"]) assert.equal(validRef(bad), false, bad);
   assert.equal(parseRepo("https://github.com/o/r/tree/../../other/repo"), null);
   assert.equal(fromQuery("?repo=o/r&ref=../../x/y").repo.ref, null);
+});
+
+test("the checker's lab verdicts match the tracker's", async () => {
+  const { createRequire } = await import("node:module");
+  const site = createRequire(import.meta.url)("../../site/logic.js");
+  const base = { outcome: "built", seconds: 87, wheel: "cp314-cp314-win_arm64", extensions: 1, import: "ok", gil: null, reason: null };
+  const cases = [
+    {}, { gil: "kept-off", seconds: 289 }, { gil: "re-enabled" }, { extensions: 0, wheel: "py3-none-any" }, { extensions: 0 },
+    { import: "failed" }, { import: "deps-failed" }, { outcome: "failed", reason: "needs OpenSSL" }, { outcome: "timeout", seconds: 2400 },
+  ];
+  for (const c of cases) assert.deepEqual(labVerdict({ ...base, ...c }), site.labVerdict({ ...base, ...c }), JSON.stringify(c));
+});
+
+test("a lab result counts only for its own release and target", () => {
+  const builds = [{ target: "3.14 win-arm64", version: "0.14.0", outcome: "built" }];
+  assert.equal(labFor(builds, "0.14.0", "3.14 win-arm64").outcome, "built");
+  assert.equal(labFor(builds, "0.13.0", "3.14 win-arm64"), null);
+  assert.equal(labFor(builds, "0.14.0", "3.14t win-arm64"), null);
+  assert.equal(labFor("nope", "0.14.0", "3.14 win-arm64"), null);
+  assert.equal(canonicalName("Typing_Extensions.x"), "typing-extensions-x");
 });

@@ -62,3 +62,8 @@
 .sw-unknown { background: var(--unknown); }
 .fix-loses { color: var(--source); }
 .fix-private, .fix-unchecked { color: var(--muted); }
+
+.lab { display: block; margin-top: 3px; font: 0.72rem var(--mono); white-space: nowrap; cursor: help; }
+.lab-works { color: var(--wheel); }
+.lab-gil, .lab-partial, .lab-slow { color: var(--source); }
+.lab-broken, .lab-fails { color: var(--missing); }

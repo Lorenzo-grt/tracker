@@ -3,7 +3,7 @@
 
 import {
   PLATFORMS, PYTHONS, parseRepo, pickLockfile, toQuery, fromQuery, sortPythons, freeThreaded,
-  fixFor, rowsFor, headline, cliCommand, fixPrompt, verdictText, nextSteps, validRef,
+  fixFor, rowsFor, headline, cliCommand, fixPrompt, verdictText, nextSteps, validRef, labVerdict, labFor, canonicalName,
 } from "./check-logic.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -18,6 +18,29 @@ const STAGES = {
   checking: "Checking every package…",
 };
 const SHOWN = 60;
+const LAB_SHORT = { works: "builds ✓", gil: "builds, GIL on", partial: "no compiled part", broken: "doesn't import", fails: "won't build", slow: "too slow" };
+const LAB_LOOKUPS = 120;
+
+// The tracker's build lab results for the gap rows' packages, from its own per-package files (same origin).
+async function loadLab(result) {
+  const names = [...new Set(result.rows.filter((r) => r.gaps.length).map((r) => canonicalName(r.name)))]
+    .filter((n) => /^[a-z0-9]+(-[a-z0-9]+)*$/.test(n) && !(n in state.lab))
+    .slice(0, LAB_LOOKUPS);
+  let next = 0;
+  const lane = async () => {
+    while (next < names.length) {
+      const n = names[next++];
+      try {
+        const r = await fetch(new URL(`../data/packages/${n}.json`, location.href));
+        state.lab[n] = r.ok ? ((await r.json()).builds ?? []) : [];
+      } catch {
+        state.lab[n] = [];
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, lane));
+  if (state.result === result) renderTable();
+}
 const FIX_TEXT = {
   all: (f) => `→ ${f.text}`,
   some: (f) => `→ ${f.text}`,
@@ -45,7 +68,7 @@ let seq = 0;
 let wheelgapVersion = null;
 const state = {
   repo: null, ref: null, root: null, plan: null, detected: null, lockfile: null, pythons: [], platforms: [],
-  result: null, fixes: null, fixesDone: false, python: null, platform: null, showAll: false, truncated: false,
+  result: null, fixes: null, fixesDone: false, python: null, platform: null, showAll: false, truncated: false, lab: {},
 };
 
 function status(text, error = false) {
@@ -148,6 +171,7 @@ function onResult(result) {
   if (!pys.includes(state.python)) state.python = pys.find((p) => !result.outside_lock.includes(p)) ?? pys[0];
   if (state.platform && !state.platforms.includes(state.platform)) state.platform = null;
   status(`Checked with wheelgap ${result.wheelgap}, in your browser.`);
+  loadLab(result);
   keepFocus(render);
   $("out").hidden = false;
 }
@@ -311,6 +335,9 @@ function renderTable() {
     : rows.length
       ? `${rows.length} package${rows.length === 1 ? "" : "s"}. The fix column names the lowest newer release with a wheel for every gap that has one, without losing a wheel elsewhere.`
       : "None: every package installs from a wheel here.";
+  if (rows.length && Object.values(state.lab).some((b) => b.length)) {
+    $("gaps-note").textContent += " Under a source build, what the tracker's build lab saw building that release from source on GitHub's runners (hover for details).";
+  }
   const shown = state.showAll ? rows : rows.slice(0, SHOWN);
   const head = el("thead", {}, el("tr", {},
     el("th", { scope: "col", text: "Package" }),
@@ -323,7 +350,11 @@ function renderTable() {
       el("td", { class: "pkg" }, el("a", { href: `https://pypi.org/project/${encodeURIComponent(row.name)}/${encodeURIComponent(row.version || "")}`, rel: "noopener", text: row.name }), el("span", { class: "ver", text: row.version || "" })),
       ...labels.map((t) => {
         const s = row.statuses[t.label];
-        return el("td", {}, s === "n/a" ? el("span", { class: "na", text: "–", title: "not installed on this target" }) : el("span", { class: `status s-${s}`, text: STATUS_TEXT[s] || s }));
+        if (s === "n/a") return el("td", {}, el("span", { class: "na", text: "–", title: "not installed on this target" }));
+        const lab = s === "source" ? labFor(state.lab[canonicalName(row.name)], row.version, t.label) : null;
+        const v = lab ? labVerdict(lab) : null;
+        return el("td", {}, el("span", { class: `status s-${s}`, text: STATUS_TEXT[s] || s }),
+          v ? el("span", { class: `lab lab-${v.kind}`, text: LAB_SHORT[v.kind], title: `Build lab, ${lab.date} on ${lab.runner}: ${v.text}` }) : null);
       }),
       el("td", { class: `fix fix-${f.kind}`, text: fixText }));
   }));
