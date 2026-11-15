@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; worker-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net https://pypi.org https://files.pythonhosted.org https://api.github.com https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net/pyodide/v314.0.8/full/ 'wasm-unsafe-eval'; worker-src 'self' https://cdn.jsdelivr.net/pyodide/v314.0.8/full/; connect-src 'self' https://cdn.jsdelivr.net/pyodide/v314.0.8/full/ https://pypi.org https://files.pythonhosted.org https://api.github.com https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
   <title>Check a Repo's Wheels</title>
   <meta name="description" content="Paste a GitHub repository: see which of its Python dependencies have no prebuilt wheel for the platforms it ships to, and the release that fixes each one. Runs in your browser.">
   <link rel="stylesheet" href="../style.css">
@@ -57,7 +57,7 @@
     <section aria-labelledby="targets-title">
       <div class="section-head">
         <h2 id="targets-title">By target</h2>
-        <div class="tabs" role="tablist" aria-label="Python version" id="python-tabs"></div>
+        <div class="tabs" role="group" aria-label="Python version" id="python-tabs"></div>
       </div>
       <p class="note" id="targets-note">Click a platform to list only its gaps.</p>
       <ol class="platforms" id="platforms"></ol>
@@ -65,6 +65,7 @@
         <span><i class="sw sw-wheel"></i> wheel</span>
         <span><i class="sw sw-source"></i> builds from source</span>
         <span><i class="sw sw-missing"></i> can't install (no wheel, no source)</span>
+        <span><i class="sw sw-unknown"></i> unknown (couldn't be checked)</span>
       </p>
     </section>
 

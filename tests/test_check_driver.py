@@ -147,6 +147,7 @@ def test_check_lists_gap_rows_and_counts(repo):
     fast = r["rows"][0]
     assert fast["gaps"] == ["3.13 linux-aarch64"]
     assert fast["keep"] == ["3.13 linux-x86_64", "3.13 musl-aarch64"]
+    assert fast["unknown"] == [] and fast["lookup"] is True
     assert fast["statuses"]["3.13 linux-aarch64"] == "source"
     # winonly isn't installed off Windows: n/a, not a gap, and not counted.
     assert r["per_target"]["3.13 linux-x86_64"] == {"wheel": 2, "source": 0, "missing": 0, "unknown": 0}
@@ -191,3 +192,35 @@ def test_fixes_names_the_nearest_release_with_a_wheel(repo):
     assert fx == {"fastlib==2.0.0": {"found": {"3.13 linux-aarch64": "2.2.0"}, "loses": []}}
     # A package that wasn't looked up gets no answer at all (the page says "not looked up", not "no fix").
     assert json.loads(driver.fixes("{}", json.dumps(r["rows"]))) == {}
+
+
+def test_a_private_index_package_is_never_looked_up_on_pypi(repo):
+    lock = (
+        LOCK.replace('{ name = "purewheel" },', '{ name = "purewheel" },\n    { name = "corp-utils" },')
+        + """
+[[package]]
+name = "corp-utils"
+version = "1.0"
+source = { registry = "https://pkgs.corp.example/simple" }
+sdist = { url = "https://pkgs.corp.example/files/corp-utils-1.0.tar.gz", hash = "sha256:00", size = 1 }
+"""
+    )
+    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+    r = json.loads(driver.check(str(repo), "uv.lock", options()))
+    corp = next(row for row in r["rows"] if row["name"] == "corp-utils")
+    assert corp["lookup"] is False
+    squatted = {"corp-utils": {"9.9": [wheel("corp_utils-9.9-py3-none-any.whl")]}}
+    assert "corp-utils==1.0" not in json.loads(driver.fixes(json.dumps(squatted), json.dumps(r["rows"])))
+
+
+def test_fixes_reports_a_release_that_only_trades_one_gap_for_another(repo):
+    r = json.loads(driver.check(str(repo), "uv.lock", options()))
+    releases = {
+        "fastlib": {
+            "2.0.0": [wheel("fastlib-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl")],
+            # has the aarch64 wheel the pin lacks, but drops x86_64 and musl: not a fix, yet not "nothing newer"
+            "2.1.0": [wheel("fastlib-2.1.0-cp313-cp313-manylinux_2_17_aarch64.whl")],
+        }
+    }
+    fx = json.loads(driver.fixes(json.dumps(releases), json.dumps(r["rows"])))
+    assert fx == {"fastlib==2.0.0": {"found": {}, "loses": ["3.13 linux-aarch64"]}}

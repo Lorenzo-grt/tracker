@@ -16,6 +16,12 @@ export const GAP = new Set(["source", "missing", "unknown"]);
 
 const NAME = /^[A-Za-z0-9_.-]{1,100}$/;
 
+// A branch, tag or commit as it can appear in a raw.githubusercontent.com path: no "..", empty or "." segment, so
+// the URL can't be normalised into another repo's.
+export function validRef(ref) {
+  return /^[A-Za-z0-9._\/-]{1,200}$/.test(ref) && ref.split("/").every((p) => p && p !== "." && p !== "..");
+}
+
 // "owner/name", a github.com URL (with /tree/REF/DIR or /blob/REF/FILE), or an SSH remote, to {owner, name, ref, dir}.
 // ref and dir are null when the input doesn't name them. Returns null for anything else.
 export function parseRepo(input) {
@@ -37,7 +43,7 @@ export function parseRepo(input) {
     if (parts[2] === "blob") rest.pop(); // a file: its folder
     dir = rest.length ? rest.join("/") : null;
   }
-  if (ref !== null && !/^[A-Za-z0-9._\/-]{1,200}$/.test(ref)) return null;
+  if (ref !== null && !validRef(ref)) return null;
   if (dir !== null && (dir.split("/").some((p) => p === ".." || p === "") || dir.length > 300)) return null;
   return { owner, name, ref, dir };
 }
@@ -79,7 +85,7 @@ export function fromQuery(search) {
   const repo = parseRepo(repoText);
   if (!repo) return null;
   const ref = q.get("ref");
-  if (ref && /^[A-Za-z0-9._\/-]{1,200}$/.test(ref)) repo.ref = ref;
+  if (ref && validRef(ref)) repo.ref = ref;
   const known = new Set(PLATFORMS.map(([p]) => p));
   const list = (k, ok) => (q.get(k) || "").split(",").filter((v) => ok(v));
   const lock = q.get("lock");
@@ -109,13 +115,23 @@ export function freeThreaded(pythons) {
   return pythons.includes(ft) ? null : ft;
 }
 
-// One row's fix, for the table and the prompt: {kind, version?, text}.
-// kind: "all" (one release fixes every gap), "some" (some gaps have a release), "none", or "unknown" (not looked up).
+// One row's fix, for the table and the prompt: {kind, version?, text}. kind is one of:
+// "all" (one release has a wheel for every gap), "some" (releases for some gaps), "loses" (every newer release with a
+// wheel for a gap drops a wheel the pin has elsewhere), "none" (no newer release has one), "private" (not looked up:
+// not positively a PyPI package, so its name stays off pypi.org), "unchecked" (no gap to fix: couldn't be checked) or
+// "pending" (not looked up yet, or the lookup failed).
 export function fixFor(row, fixes) {
+  if (!row.gaps.length) return { kind: "unchecked", text: "" };
+  if (row.lookup === false) return { kind: "private", text: "not looked up (not from PyPI)" };
   const fix = fixes?.[`${row.name}==${row.version}`];
-  if (fix === undefined) return { kind: "unknown", text: "" };
+  if (fix === undefined) return { kind: "pending", text: "" };
   const found = Object.entries(fix.found);
-  if (!found.length) return { kind: "none", text: "no newer release has a wheel" };
+  const loses = fix.loses || [];
+  if (!found.length) {
+    return loses.length
+      ? { kind: "loses", text: "only releases that drop a wheel elsewhere" }
+      : { kind: "none", text: "no newer release has a wheel" };
+  }
   const versions = [...new Set(found.map(([, v]) => v))];
   const major = (v) => String(v).split(".")[0];
   const caution = versions.some((v) => major(v) !== major(row.version)) ? " (a new major version)" : "";
@@ -129,20 +145,23 @@ export function fixFor(row, fixes) {
   };
 }
 
-// The gap rows for one Python, with how many of its platforms each fails on.
+// The rows with a gap (or a target that couldn't be checked) on one Python, most such platforms first.
 export function rowsFor(result, python) {
   const labels = result.targets.filter((t) => t.python === python).map((t) => t.label);
+  const marked = (r, l) => r.gaps.includes(l) || (r.unknown || []).includes(l);
   return result.rows
-    .map((r) => ({ ...r, here: labels.filter((l) => GAP.has(r.statuses[l]) && r.gaps.includes(l)) }))
+    .map((r) => ({ ...r, here: labels.filter((l) => GAP.has(r.statuses[l]) && marked(r, l)) }))
     .filter((r) => r.here.length)
     .sort((a, b) => b.here.length - a.here.length || a.name.localeCompare(b.name));
 }
 
-// The headline for a result: how many distinct packages have a gap somewhere, out of how many.
+// The headline numbers: distinct packages with no wheel somewhere (gaps), distinct packages that couldn't be checked
+// somewhere and have no gap (unknown), out of how many, on how many counted targets.
 export function headline(result) {
-  const names = new Set(result.rows.map((r) => r.name));
+  const gaps = new Set(result.rows.filter((r) => r.gaps.length).map((r) => r.name));
+  const unknown = new Set(result.rows.filter((r) => (r.unknown || []).length && !gaps.has(r.name)).map((r) => r.name));
   const counted = result.targets.filter((t) => !result.outside_lock.includes(t.python));
-  return { gaps: names.size, packages: result.packages, targets: counted.length };
+  return { gaps: gaps.size, unknown: unknown.size, packages: result.packages, targets: counted.length };
 }
 
 // The `uvx wheelgap` command that reproduces the result locally.
@@ -153,25 +172,26 @@ export function cliCommand(result, pythons, platforms) {
 
 // A prompt to paste into Claude Code (or any coding agent): the gaps, the bumps that fix them, and how to confirm.
 export function fixPrompt(repoName, result, fixes, pythons, platforms) {
-  const bumps = [];
-  const partial = [];
-  const stuck = [];
-  const unchecked = [];
+  const groups = { all: [], some: [], loses: [], none: [], private: [], pending: [] };
   for (const r of result.rows) {
     const f = fixFor(r, fixes);
-    if (f.kind === "all") bumps.push(`- ${r.name} ${r.version} -> ${f.text}`);
-    else if (f.kind === "some") partial.push(`- ${r.name} ${r.version} -> ${f.text} (gaps on ${r.gaps.join(", ")})`);
-    else if (f.kind === "none") stuck.push(`- ${r.name} ${r.version}: ${r.gaps.join(", ")}`);
-    else unchecked.push(`- ${r.name} ${r.version}: ${r.gaps.join(", ")}`);
+    if (f.kind === "unchecked") continue;
+    const gaps = r.gaps.join(", ");
+    if (f.kind === "all") groups.all.push(`- ${r.name} ${r.version} -> ${f.text}`);
+    else if (f.kind === "some") groups.some.push(`- ${r.name} ${r.version} -> ${f.text} (gaps on ${gaps})`);
+    else groups[f.kind].push(`- ${r.name} ${r.version}: ${gaps}`);
   }
   const lines = [
     `In ${repoName}, wheelgap found dependencies in ${result.lockfile} with no prebuilt wheel for some of the platforms we target (Python ${sortPythons(pythons).join(", ")} on ${platforms.join(", ")}), so they'd be compiled from source or fail to install.`,
     "",
   ];
-  if (bumps.length) lines.push("Bump these to the release named, which has wheels for every target where the pinned one is missing one:", ...bumps, "");
-  if (partial.length) lines.push("These have a newer release with wheels for some of the gaps:", ...partial, "");
-  if (stuck.length) lines.push("No newer release has a wheel for these (consider dropping the target, another package, or building wheels):", ...stuck, "");
-  if (unchecked.length) lines.push("These weren't looked up on PyPI, so check them with `uvx wheelgap --explain --suggest`:", ...unchecked, "");
+  const section = (key, title) => groups[key].length && lines.push(title, ...groups[key], "");
+  section("all", "Bump these to the release named, which has wheels for every target where the pinned one is missing one:");
+  section("some", "These have a newer release with wheels for some of the gaps:");
+  section("loses", "For these, every newer release with the missing wheel drops a wheel the pinned one has elsewhere, so a bump trades one gap for another:");
+  section("none", "No newer release has a wheel for these (consider dropping the target, another package, or building wheels):");
+  section("private", "These don't come from PyPI (another index, Git or a path), so they weren't looked up; check them where they're published:");
+  section("pending", "These weren't looked up on PyPI, so check them with `uvx wheelgap --explain --suggest`:");
   lines.push(
     "Check each bump against our version constraints (a new major version may need code changes), update the lockfile with the project's own tool, and confirm with:",
     `  ${cliCommand(result, pythons, platforms)}`,
@@ -184,6 +204,9 @@ export function fixPrompt(repoName, result, fixes, pythons, platforms) {
 // The verdict's headline sentence.
 export function verdictText(h) {
   const where = h.targets === 1 ? "this target" : `all ${h.targets} targets`;
+  if (h.gaps === 0 && h.unknown) {
+    return `No package is missing a wheel, but ${h.unknown} of ${h.packages} couldn't be checked on ${h.targets === 1 ? "this target" : "some targets"}`;
+  }
   if (h.gaps === 0) return `✓ All ${h.packages} packages have a wheel for ${where}`;
   const some = h.targets === 1 ? "this target" : `at least one of the ${h.targets} targets`;
   return `${h.gaps} of ${h.packages} packages ${h.gaps === 1 ? "has" : "have"} no wheel for ${some}`;

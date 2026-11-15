@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseRepo, rawUrl, pickLockfile, toQuery, fromQuery, sortPythons, freeThreaded, fixFor, rowsFor, headline,
-  cliCommand, fixPrompt, verdictText, nextSteps,
+  cliCommand, fixPrompt, verdictText, nextSteps, validRef,
 } from "../../site/check/check-logic.mjs";
 
 test("parseRepo reads the forms people paste", () => {
@@ -62,11 +62,11 @@ test("Pythons sort with each free-threaded build after its own", () => {
   assert.equal(freeThreaded(["3.14", "3.14t"]), null);
 });
 
-const row = (name, version, gaps, statuses = {}) => ({ name, version, gaps, keep: [], statuses });
+const row = (name, version, gaps, statuses = {}, extra = {}) => ({ name, version, gaps, unknown: [], keep: [], statuses, lookup: true, ...extra });
 
 test("fixFor says one release, some, none, or not looked up", () => {
   const r = row("numpy", "1.26.4", ["3.14 linux-x86_64", "3.14 win-arm64"]);
-  assert.deepEqual(fixFor(r, null), { kind: "unknown", text: "" });
+  assert.deepEqual(fixFor(r, null), { kind: "pending", text: "" });
   assert.deepEqual(fixFor(r, { "numpy==1.26.4": { found: {}, loses: [] } }), { kind: "none", text: "no newer release has a wheel" });
   const all = fixFor(r, { "numpy==1.26.4": { found: { "3.14 linux-x86_64": "2.3.2", "3.14 win-arm64": "2.3.2" }, loses: [] } });
   assert.deepEqual(all, { kind: "all", version: "2.3.2", text: "2.3.2 (a new major version)" });
@@ -92,7 +92,7 @@ const result = {
 test("rowsFor lists one Python's gaps, most first; headline counts distinct packages on counted targets", () => {
   assert.deepEqual(rowsFor(result, "3.14").map((r) => [r.name, r.here.length]), [["b", 2], ["a", 1]]);
   assert.deepEqual(rowsFor(result, "3.15"), []); // outside the lock: check() reports no gaps there
-  assert.deepEqual(headline(result), { gaps: 2, packages: 10, targets: 2 });
+  assert.deepEqual(headline(result), { gaps: 2, unknown: 0, packages: 10, targets: 2 });
 });
 
 test("the CLI command and the fix prompt reproduce the check", () => {
@@ -122,4 +122,37 @@ test("next steps offer what isn't picked yet, as whole selections", () => {
   assert.equal(steps.at(-1).platforms.length, 8);
   const all = ["linux-x86_64", "linux-aarch64", "musl-x86_64", "musl-aarch64", "macos-arm64", "macos-x86_64", "win-amd64", "win-arm64"];
   assert.deepEqual(nextSteps(["3.15", "3.15t"], all), []);
+});
+
+test("fixFor: a bump that drops a wheel elsewhere isn't 'no newer wheel', and private packages aren't looked up", () => {
+  const r = row("foo", "1.0", ["3.13 linux-aarch64"]);
+  const loses = fixFor(r, { "foo==1.0": { found: {}, loses: ["3.13 linux-aarch64"] } });
+  assert.equal(loses.kind, "loses");
+  const priv = row("corp-utils", "1.0", ["3.13 linux-x86_64"], {}, { lookup: false });
+  assert.equal(fixFor(priv, { "corp-utils==1.0": { found: { "3.13 linux-x86_64": "9.9" }, loses: [] } }).kind, "private");
+  assert.equal(fixFor(row("x", "1", [], {}, { unknown: ["3.13 linux-x86_64"] }), {}).kind, "unchecked");
+  const res = { ...result, rows: [r, priv] };
+  const prompt = fixPrompt("o/r", res, { "foo==1.0": { found: {}, loses: ["3.13 linux-aarch64"] } }, ["3.13"], ["linux-aarch64"]);
+  assert.match(prompt, /trades one gap for another[^\n]*\n- foo 1\.0: 3\.13 linux-aarch64/);
+  assert.match(prompt, /don't come from PyPI[^\n]*\n- corp-utils 1\.0/);
+  assert.doesNotMatch(prompt, /No newer release has a wheel/);
+  assert.doesNotMatch(prompt, /9\.9/);
+});
+
+test("unknown cells are listed but not counted as missing a wheel", () => {
+  const res = {
+    ...result,
+    outside_lock: [],
+    rows: [row("u", "1", [], { "3.14 linux-x86_64": "unknown", "3.14 win-arm64": "wheel" }, { unknown: ["3.14 linux-x86_64"] })],
+  };
+  assert.deepEqual(headline(res), { gaps: 0, unknown: 1, packages: 10, targets: 3 });
+  assert.deepEqual(rowsFor(res, "3.14").map((r) => r.name), ["u"]);
+  assert.equal(verdictText(headline(res)), "No package is missing a wheel, but 1 of 10 couldn't be checked on some targets");
+});
+
+test("refs with '..' or empty segments are refused", () => {
+  assert.ok(validRef("main") && validRef("feature/x") && validRef("v1.2.3"));
+  for (const bad of ["..", "a/../b", "a//b", "/a", "a/", ".", "a b"]) assert.equal(validRef(bad), false, bad);
+  assert.equal(parseRepo("https://github.com/o/r/tree/../../other/repo"), null);
+  assert.equal(fromQuery("?repo=o/r&ref=../../x/y").repo.ref, null);
 });

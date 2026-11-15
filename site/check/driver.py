@@ -18,7 +18,8 @@ import json
 from pathlib import Path, PurePosixPath
 
 import wheelgap
-from wheelgap import api, suggest_targets
+from packaging.utils import canonicalize_name
+from wheelgap import api, origin, suggest_targets
 from wheelgap import suggest as release_suggest
 from wheelgap.check import Status
 from wheelgap.sources import LOCKFILES, SourceError, pythons_outside_lock
@@ -27,7 +28,7 @@ from wheelgap.targets import DEFAULT_PLATFORMS, NEWEST_PYTHON, Target, TargetErr
 # The lockfiles that list each package's files, so they can be checked without asking an index. The others
 # (Pipfile.lock, requirements files) need PyPI lookups, which the page doesn't make yet.
 OFFLINE = ("uv.lock", "pylock.toml", "poetry.lock", "pdm.lock", "pixi.lock")
-GAPS = (Status.SOURCE, Status.MISSING, Status.UNKNOWN)
+GAPS = (Status.SOURCE, Status.MISSING)  # no wheel; UNKNOWN (couldn't be checked) is reported apart
 MAX_LOCKFILES = 30
 MAX_DOCKERFILES = 40
 
@@ -145,7 +146,15 @@ def check(root: str, lockfile: str, options_json: str) -> str:
     _targets.update((t.label(True), t) for t in targets)
     outside = set(pythons_outside_lock(source, targets))
     counted = [t for t in targets if t.python not in outside]
-    per_target = {t.label(True): {s.value: 0 for s in (Status.WHEEL, *GAPS)} for t in targets}
+    per_target = {t.label(True): {s.value: 0 for s in (Status.WHEEL, *GAPS, Status.UNKNOWN)} for t in targets}
+    # --suggest's rule (origin.known_pypi): only packages positively from PyPI are looked up there, so a private
+    # package's name never goes to pypi.org, and a same-named PyPI project is never offered as its fix.
+    private = origin.private_names([source])
+    on_pypi: dict[tuple[str, str | None], bool] = {}
+    for original in source.packages:
+        for p in original.variants:
+            key = (canonicalize_name(p.name), p.version)
+            on_pypi[key] = on_pypi.get(key, True) and origin.known_pypi(p, source, private=private)
     rows = []
     for r in results:
         statuses = {t.label(True): r.statuses.get(t, Status.NOT_NEEDED).value for t in targets}
@@ -154,9 +163,21 @@ def check(root: str, lockfile: str, options_json: str) -> str:
             if s is not None and s.value in per_target[t.label(True)]:
                 per_target[t.label(True)][s.value] += 1
         gaps = [t.label(True) for t in counted if r.statuses.get(t) in GAPS]
-        if gaps:
+        unknown = [t.label(True) for t in counted if r.statuses.get(t) is Status.UNKNOWN]
+        if gaps or unknown:
             keep = [t.label(True) for t in counted if r.statuses.get(t) is Status.WHEEL]
-            rows.append({"name": r.name, "version": r.version, "statuses": statuses, "gaps": gaps, "keep": keep})
+            lookup = bool(gaps and r.version) and on_pypi.get((canonicalize_name(r.name), r.version), False)
+            rows.append(
+                {
+                    "name": r.name,
+                    "version": r.version,
+                    "statuses": statuses,
+                    "gaps": gaps,
+                    "unknown": unknown,
+                    "keep": keep,
+                    "lookup": lookup,
+                }
+            )
     return json.dumps(
         {
             "wheelgap": wheelgap.__version__,
@@ -175,13 +196,14 @@ def check(root: str, lockfile: str, options_json: str) -> str:
 def fixes(releases_json: str, wanted_json: str) -> str:
     """For each wanted row ({name, version, gaps, keep} from check()), the release --suggest names for its gaps.
 
-    releases: by name, the `releases` mapping of PyPI's project JSON. A name missing from it gets no answer, which
-    the page shows as "not looked up", never as "no newer release"."""
+    releases: by name, the `releases` mapping of PyPI's project JSON. A name missing from it, or a row check() didn't
+    mark for lookup (not positively a PyPI package), gets no answer: the page shows "not looked up", never "no newer
+    release"."""
     releases, wanted = json.loads(releases_json), json.loads(wanted_json)
     out = {}
     for row in wanted:
         rel = releases.get(row["name"])
-        if not isinstance(rel, dict) or not row.get("version"):
+        if not row.get("lookup") or not row.get("gaps") or not isinstance(rel, dict) or not row.get("version"):
             continue
         gaps = [_targets[g] for g in row["gaps"] if g in _targets]
         keep = [_targets[k] for k in row["keep"] if k in _targets]

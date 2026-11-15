@@ -11,7 +11,8 @@ const MAX_FILE = 25 * 1024 * 1024;
 const MAX_FIX_LOOKUPS = 80;
 
 let ready = null; // the driver module, once Pyodide and wheelgap are in
-let repo = null; // the loaded repo: {owner, name, ref, root}
+let latestLoad = null; // the id of the newest load asked for: an older one that finishes later is dropped
+const loaded = new Map(); // by root folder: the loaded repo {owner, name, ref, root, fetched}; only the newest is kept
 const releases = new Map(); // PyPI release lists by name, kept across checks
 
 const post = (msg) => self.postMessage(msg);
@@ -44,7 +45,7 @@ async function getJson(url) {
     throw new Failure("network", "Couldn't reach GitHub. Check your connection and try again.");
   }
   if (r.status === 404) throw new Failure("not-found", "No such public repository (or branch). Private repos can't be read here: run uvx wheelgap in your checkout instead.");
-  if (r.status === 403 || r.status === 429) {
+  if (r.status === 429 || (r.status === 403 && r.headers.get("x-ratelimit-remaining") === "0")) {
     const reset = Number(r.headers.get("x-ratelimit-reset"));
     const when = reset ? new Date(reset * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "an hour";
     throw new Failure("rate-limit", `GitHub's limit for anonymous requests from your network (60 an hour) is used up. Try again after ${when}, or run uvx wheelgap locally.`);
@@ -56,9 +57,11 @@ async function getJson(url) {
 async function getText(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Failure("file", `Couldn't fetch ${url.split("/").slice(6).join("/")} (${r.status}).`);
-  const len = Number(r.headers.get("content-length"));
-  if (len > MAX_FILE) throw new Failure("file", `${url.split("/").pop()} is over 25 MB, too big to check in the browser.`);
-  return new Uint8Array(await r.arrayBuffer());
+  const big = () => new Failure("file", `${url.split("/").pop()} is over 25 MB, too big to check in the browser.`);
+  if (Number(r.headers.get("content-length")) > MAX_FILE) throw big();
+  const bytes = new Uint8Array(await r.arrayBuffer()); // content-length may be missing (compressed responses)
+  if (bytes.byteLength > MAX_FILE) throw big();
+  return bytes;
 }
 
 // Runs fn over items, at most `limit` at a time.
@@ -81,7 +84,12 @@ function write(py, root, path, bytes) {
   py.FS.writeFile(full, bytes);
 }
 
-async function load(r) {
+function forget(py, root) {
+  loaded.delete(root);
+  py.pyimport("shutil").rmtree.callKwargs(root, { ignore_errors: true });
+}
+
+async function load(r, id) {
   const { py, driver } = await ready;
   const ref = r.ref || "HEAD";
   post({ type: "progress", stage: "tree" });
@@ -90,7 +98,7 @@ async function load(r) {
   );
   const paths = (tree.tree || []).filter((e) => e.type === "blob").map((e) => e.path);
   const plan = JSON.parse(driver.plan(JSON.stringify(paths)));
-  const root = `/repos/${r.owner}/${r.name}/${Date.now()}`;
+  const root = `/repos/${id}`;
   const files = [...plan.workflows, ...plan.dockerfiles, ...(plan.python_version ? [plan.python_version] : [])];
   post({ type: "progress", stage: "files", count: files.length });
   const unread = [];
@@ -104,13 +112,19 @@ async function load(r) {
   py.FS.mkdirTree(root);
   const detected = JSON.parse(driver.detect(root));
   detected.unreadable.push(...unread);
-  repo = { ...r, ref, root, fetched: new Set() };
-  return { plan, detected, truncated: Boolean(tree.truncated), ref };
+  if (id !== latestLoad) {
+    forget(py, root);
+    throw new Failure("stale", "superseded by a newer load"); // the page has moved on and ignores this
+  }
+  for (const old of [...loaded.keys()]) forget(py, old);
+  loaded.set(root, { ...r, ref, root, fetched: new Set() });
+  return { plan, detected, truncated: Boolean(tree.truncated), ref, root };
 }
 
-async function check(lockfile, options) {
+async function check(root, lockfile, options) {
   const { py, driver } = await ready;
-  if (!repo) throw new Failure("state", "Load a repository first.");
+  const repo = loaded.get(root); // the repo this check was asked about, never whichever loaded last
+  if (!repo) throw new Failure("state", "That repository is no longer loaded. Check it again.");
   if (!repo.fetched.has(lockfile)) {
     post({ type: "progress", stage: "lockfile", path: lockfile });
     write(py, repo.root, lockfile, await getText(rawUrl(repo, repo.ref, lockfile)));
@@ -121,31 +135,37 @@ async function check(lockfile, options) {
   return result;
 }
 
-// Looks up the gap rows' packages on PyPI (most gaps first) and asks the driver for each one's nearest fix.
+// Looks up on PyPI the gap rows the driver marked as PyPI packages (most gaps first; never a private index's names)
+// and asks the driver for each one's nearest fix. A failed lookup isn't remembered, so the next check retries it.
 async function fixes(rows) {
   const { driver } = await ready;
-  const names = [...new Set([...rows].sort((a, b) => b.gaps.length - a.gaps.length).map((r) => r.name))];
+  const wanted = rows.filter((r) => r.lookup && r.gaps.length);
+  const names = [...new Set([...wanted].sort((a, b) => b.gaps.length - a.gaps.length).map((r) => r.name))];
   const todo = names.filter((n) => !releases.has(n)).slice(0, MAX_FIX_LOOKUPS);
-  await pool(todo, 8, async (n) => {
+  await pool(todo, 6, async (n) => {
     try {
       const r = await fetch(`https://pypi.org/pypi/${encodeURIComponent(n)}/json`);
-      releases.set(n, r.ok ? (await r.json()).releases ?? null : null);
+      if (r.ok) releases.set(n, (await r.json()).releases ?? null);
+      else if (r.status === 404) releases.set(n, null);
     } catch {
-      releases.set(n, null);
+      // network trouble: not cached
     }
   });
   const have = Object.fromEntries(names.filter((n) => releases.get(n)).map((n) => [n, releases.get(n)]));
-  return JSON.parse(driver.fixes(JSON.stringify(have), JSON.stringify(rows)));
+  return JSON.parse(driver.fixes(JSON.stringify(have), JSON.stringify(wanted)));
 }
 
 self.onmessage = async ({ data }) => {
   const { id, type } = data;
   try {
-    if (type === "load") post({ id, type: "loaded", ...(await load(data.repo)) });
-    else if (type === "check") {
-      const result = await check(data.lockfile, data.options);
+    if (type === "load") {
+      latestLoad = id;
+      post({ id, type: "loaded", ...(await load(data.repo, id)) });
+    } else if (type === "check") {
+      const result = await check(data.root, data.lockfile, data.options);
       post({ id, type: "result", result });
-      if (!result.error && result.rows.length) post({ id, type: "fixes", fixes: await fixes(result.rows) });
+      if (!result.error && result.rows.some((r) => r.lookup)) post({ id, type: "fixes", fixes: await fixes(result.rows) });
+      else if (!result.error) post({ id, type: "fixes", fixes: {} });
     }
   } catch (e) {
     post({ id, type: "error", kind: e.kind || "internal", message: e.kind ? e.message : `Something went wrong: ${e.message || e}` });

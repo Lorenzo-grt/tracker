@@ -3,7 +3,7 @@
 
 import {
   PLATFORMS, PYTHONS, parseRepo, pickLockfile, toQuery, fromQuery, sortPythons, freeThreaded,
-  fixFor, rowsFor, headline, cliCommand, fixPrompt, verdictText, nextSteps,
+  fixFor, rowsFor, headline, cliCommand, fixPrompt, verdictText, nextSteps, validRef,
 } from "./check-logic.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -18,6 +18,14 @@ const STAGES = {
   checking: "Checking every package…",
 };
 const SHOWN = 60;
+const FIX_TEXT = {
+  all: (f) => `→ ${f.text}`,
+  some: (f) => `→ ${f.text}`,
+  loses: () => "only by losing a wheel elsewhere",
+  none: () => "no newer wheel",
+  private: () => "not looked up (not from PyPI)",
+  unchecked: () => "",
+};
 
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
@@ -36,7 +44,7 @@ const worker = new Worker(new URL("./worker.mjs", import.meta.url), { type: "mod
 let seq = 0;
 let wheelgapVersion = null;
 const state = {
-  repo: null, ref: null, plan: null, detected: null, lockfile: null, pythons: [], platforms: [],
+  repo: null, ref: null, root: null, plan: null, detected: null, lockfile: null, pythons: [], platforms: [],
   result: null, fixes: null, fixesDone: false, python: null, platform: null, showAll: false, truncated: false,
 };
 
@@ -44,6 +52,23 @@ function status(text, error = false) {
   $("status").textContent = text;
   $("status").classList.toggle("error", error);
 }
+
+// Re-rendering replaces buttons; this puts keyboard focus back on the one with the same data-key.
+function keepFocus(fn) {
+  const key = document.activeElement?.dataset?.key;
+  fn();
+  if (key) document.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus();
+}
+
+function workerFailed(message) {
+  status(message, true);
+  $("go").disabled = false;
+}
+worker.onerror = (e) => {
+  e.preventDefault();
+  workerFailed("The checker stopped (Python couldn't load, or the browser ran out of memory). Reload the page to try again.");
+};
+worker.onmessageerror = () => workerFailed("The checker sent something the page couldn't read. Reload the page to try again.");
 
 worker.onmessage = ({ data }) => {
   if (data.type === "progress") return status(STAGES[data.stage] || "Working…");
@@ -78,8 +103,8 @@ function start(repo, query = null) {
   worker.postMessage({ id: ++seq, type: "load", repo });
 }
 
-function onLoaded({ plan, detected, truncated, ref }) {
-  Object.assign(state, { plan, detected, truncated, ref });
+function onLoaded({ plan, detected, truncated, ref, root }) {
+  Object.assign(state, { plan, detected, truncated, ref, root });
   const q = state.query;
   const lock = (q?.lockfile && plan.lockfiles.find((l) => l.path === q.lockfile)) || pickLockfile(plan.lockfiles, state.repo.dir);
   if (!lock) {
@@ -106,7 +131,7 @@ function runCheck() {
   const lock = state.plan.lockfiles.find((l) => l.path === state.lockfile);
   if (!lock.offline) return needsIndex(lock.path);
   status(STAGES.checking);
-  worker.postMessage({ id: ++seq, type: "check", lockfile: state.lockfile, options });
+  worker.postMessage({ id: ++seq, type: "check", root: state.root, lockfile: state.lockfile, options });
 }
 
 function onResult(result) {
@@ -120,7 +145,7 @@ function onResult(result) {
   if (!pys.includes(state.python)) state.python = pys.find((p) => !result.outside_lock.includes(p)) ?? pys[0];
   if (state.platform && !state.platforms.includes(state.platform)) state.platform = null;
   status(`Checked with wheelgap ${result.wheelgap}, in your browser.`);
-  render();
+  keepFocus(render);
   $("out").hidden = false;
 }
 
@@ -166,18 +191,21 @@ function renderVerdict() {
   const h = headline(r);
   const card = $("verdict").closest("section");
   const repoName = `${state.repo.owner}/${state.repo.name}`;
-  card.classList.toggle("clean", h.gaps === 0 && h.targets > 0);
+  card.classList.toggle("clean", h.gaps === 0 && h.unknown === 0 && h.targets > 0);
   $("verdict").textContent = h.targets === 0 ? `${repoName}'s lockfile leaves out every Python picked` : verdictText(h);
   const steps = nextSteps(state.pythons, state.platforms);
   $("next").hidden = !steps.length;
   $("next-buttons").replaceChildren(...steps.map((s) => el("button", {
-    type: "button", class: "chip shortcut", text: `+ ${s.label}`,
+    type: "button", class: "chip shortcut", text: `+ ${s.label}`, "data-key": `next:${s.label}`,
     onclick: () => { state.pythons = s.pythons; state.platforms = s.platforms; runCheck(); },
   })));
   $("verdict-detail").textContent = `${repoName} · ${r.lockfile}${state.ref && state.ref !== "HEAD" ? ` at ${state.ref}` : ""} · Python ${sortPythons(state.pythons).join(", ")} on ${state.platforms.length} platform${state.platforms.length === 1 ? "" : "s"}`;
   const alerts = [];
   if (r.outside_lock.length) {
     alerts.push(el("p", { class: "alert warn", text: `${r.lockfile} only allows Python ${r.requires_python}, so it has no wheels for ${r.outside_lock.join(", ")} and those aren't counted. Widening requires-python and re-locking is the first step there.` }));
+  }
+  if (h.unknown) {
+    alerts.push(el("p", { class: "alert warn", text: `${h.unknown} package${h.unknown === 1 ? "" : "s"} couldn't be checked on some targets (marked unknown below), so they aren't counted as having a wheel or not.` }));
   }
   if (r.skipped.length) {
     alerts.push(el("p", { class: "alert", text: `Not checked, since they aren't from PyPI (the project itself, or path, Git and workspace packages): ${r.skipped.slice(0, 8).join(", ")}${r.skipped.length > 8 ? `, and ${r.skipped.length - 8} more` : ""}.` }));
@@ -186,7 +214,7 @@ function renderVerdict() {
 }
 
 function chip(label, pressed, onclick, extra = {}) {
-  return el("button", { type: "button", class: `chip${extra.shortcut ? " shortcut" : ""}`, "aria-pressed": String(pressed), title: extra.title, onclick },
+  return el("button", { type: "button", class: `chip${extra.shortcut ? " shortcut" : ""}`, "aria-pressed": String(pressed), title: extra.title, "data-key": `chip:${label}`, onclick },
     label, extra.ci ? el("span", { class: "ci", text: "CI" }) : null);
 }
 
@@ -243,8 +271,8 @@ function renderTargets() {
   const r = state.result;
   const pys = sortPythons(r.targets.map((t) => t.python));
   $("python-tabs").replaceChildren(...pys.map((v) => el("button", {
-    type: "button", role: "tab", "aria-selected": String(v === state.python), text: v,
-    onclick: () => { state.python = v; state.platform = null; renderTargets(); renderTable(); },
+    type: "button", "aria-pressed": String(v === state.python), text: v, "data-key": `py:${v}`,
+    onclick: () => { state.python = v; state.platform = null; keepFocus(() => { renderTargets(); renderTable(); }); },
   })));
   const outside = r.outside_lock.includes(state.python);
   const rows = r.targets.filter((t) => t.python === state.python).map((t) => {
@@ -254,11 +282,11 @@ function renderTargets() {
     const pct = (k) => (total ? (100 * c[k]) / total : 0);
     const pressed = state.platform === t.platform;
     return el("li", {}, el("button", {
-      type: "button", "aria-pressed": String(pressed),
-      onclick: () => { state.platform = pressed ? null : t.platform; renderTargets(); renderTable(); },
+      type: "button", "aria-pressed": String(pressed), "data-key": `platform:${t.platform}`,
+      onclick: () => { state.platform = pressed ? null : t.platform; keepFocus(() => { renderTargets(); renderTable(); }); },
     },
     el("span", { class: "pname" }, NAMES[t.platform] || t.platform, el("small", { text: t.platform })),
-    el("span", { class: "bar", title: outside ? "not in the lock's Pythons" : `${c.wheel} wheel, ${c.source} from source, ${c.missing} can't install` },
+    el("span", { class: "bar", title: outside ? "not in the lock's Pythons" : `${c.wheel} wheel, ${c.source} from source, ${c.missing} can't install${c.unknown ? `, ${c.unknown} unknown` : ""}` },
       ...["wheel", "source", "missing", "unknown"].map((k) => el("span", { class: `b-${k}`, style: `width:${pct(k)}%` }))),
     el("span", { class: "pct" }, outside ? "–" : without === 0 ? "✓" : String(without), el("small", { text: outside ? "not locked" : without === 0 ? "all wheels" : "without a wheel" }))));
   });
@@ -275,9 +303,11 @@ function renderTable() {
   let rows = rowsFor(r, state.python);
   if (state.platform) rows = rows.filter((row) => row.here.some((l) => labels.some((t) => t.label === l)));
   $("gaps-title").textContent = `Packages without a wheel on Python ${state.python}${state.platform ? `, ${NAMES[state.platform]}` : ""}`;
-  $("gaps-note").textContent = rows.length
-    ? `${rows.length} package${rows.length === 1 ? "" : "s"}. The fix column names the lowest newer release with a wheel for every gap that has one, without losing a wheel elsewhere.`
-    : "None: every package installs from a wheel here.";
+  $("gaps-note").textContent = r.outside_lock.includes(state.python)
+    ? `${r.lockfile} doesn't allow Python ${state.python} (requires-python ${r.requires_python}), so it has no wheels for it to check. Widen requires-python and re-lock first.`
+    : rows.length
+      ? `${rows.length} package${rows.length === 1 ? "" : "s"}. The fix column names the lowest newer release with a wheel for every gap that has one, without losing a wheel elsewhere.`
+      : "None: every package installs from a wheel here.";
   const shown = state.showAll ? rows : rows.slice(0, SHOWN);
   const head = el("thead", {}, el("tr", {},
     el("th", { scope: "col", text: "Package" }),
@@ -285,14 +315,14 @@ function renderTable() {
     el("th", { scope: "col", text: "Fix" })));
   const body = el("tbody", {}, ...shown.map((row) => {
     const f = fixFor(row, state.fixes);
-    const fixText = f.kind === "all" ? `→ ${f.text}` : f.kind === "some" ? `→ ${f.text}` : f.kind === "none" ? "no newer wheel" : state.fixesDone ? "not looked up" : "…";
+    const fixText = f.kind === "pending" ? (state.fixesDone ? "not looked up" : "…") : FIX_TEXT[f.kind](f);
     return el("tr", {},
       el("td", { class: "pkg" }, el("a", { href: `https://pypi.org/project/${encodeURIComponent(row.name)}/${encodeURIComponent(row.version || "")}`, rel: "noopener", text: row.name }), el("span", { class: "ver", text: row.version || "" })),
       ...labels.map((t) => {
         const s = row.statuses[t.label];
         return el("td", {}, s === "n/a" ? el("span", { class: "na", text: "–", title: "not installed on this target" }) : el("span", { class: `status s-${s}`, text: STATUS_TEXT[s] || s }));
       }),
-      el("td", { class: `fix fix-${f.kind === "unknown" ? "pending" : f.kind}`, text: fixText }));
+      el("td", { class: `fix fix-${f.kind}`, text: fixText }));
   }));
   $("gap-table").replaceChildren(head, body);
   $("gap-table").hidden = !rows.length;
@@ -337,7 +367,10 @@ $("form").addEventListener("submit", (e) => {
   if (at) [, text, ref] = at;
   const repo = parseRepo(text);
   if (!repo) return status("That doesn't look like a GitHub repository. Try owner/name or a github.com URL.", true);
-  if (ref) repo.ref = ref;
+  if (ref) {
+    if (!validRef(ref)) return status("That branch or tag name isn't one this page can read.", true);
+    repo.ref = ref;
+  }
   start(repo);
 });
 for (const b of document.querySelectorAll("[data-repo]")) b.addEventListener("click", () => start(parseRepo(b.dataset.repo)));
