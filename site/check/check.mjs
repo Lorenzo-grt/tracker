@@ -71,7 +71,10 @@ worker.onerror = (e) => {
 worker.onmessageerror = () => workerFailed("The checker sent something the page couldn't read. Reload the page to try again.");
 
 worker.onmessage = ({ data }) => {
-  if (data.type === "progress") return status(STAGES[data.stage] || "Working…");
+  if (data.type === "progress") {
+    if (data.id === undefined || data.id === seq) status(STAGES[data.stage] || "Working…"); // not a dropped request's
+    return;
+  }
   if (data.type === "ready") {
     wheelgapVersion = data.wheelgap;
     if (!state.repo) status(`Ready. wheelgap ${data.wheelgap} is running in your browser.`);

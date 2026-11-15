@@ -92,7 +92,7 @@ function forget(py, root) {
 async function load(r, id) {
   const { py, driver } = await ready;
   const ref = r.ref || "HEAD";
-  post({ type: "progress", stage: "tree" });
+  post({ id, type: "progress", stage: "tree" });
   const tree = await getJson(
     `https://api.github.com/repos/${r.owner}/${r.name}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
   );
@@ -100,7 +100,7 @@ async function load(r, id) {
   const plan = JSON.parse(driver.plan(JSON.stringify(paths)));
   const root = `/repos/${id}`;
   const files = [...plan.workflows, ...plan.dockerfiles, ...(plan.python_version ? [plan.python_version] : [])];
-  post({ type: "progress", stage: "files", count: files.length });
+  post({ id, type: "progress", stage: "files", count: files.length });
   const unread = [];
   await pool(files, 8, async (p) => {
     try {
@@ -121,16 +121,16 @@ async function load(r, id) {
   return { plan, detected, truncated: Boolean(tree.truncated), ref, root };
 }
 
-async function check(root, lockfile, options) {
+async function check(id, root, lockfile, options) {
   const { py, driver } = await ready;
   const repo = loaded.get(root); // the repo this check was asked about, never whichever loaded last
   if (!repo) throw new Failure("state", "That repository is no longer loaded. Check it again.");
   if (!repo.fetched.has(lockfile)) {
-    post({ type: "progress", stage: "lockfile", path: lockfile });
+    post({ id, type: "progress", stage: "lockfile", path: lockfile });
     write(py, repo.root, lockfile, await getText(rawUrl(repo, repo.ref, lockfile)));
     repo.fetched.add(lockfile);
   }
-  post({ type: "progress", stage: "checking" });
+  post({ id, type: "progress", stage: "checking" });
   const result = JSON.parse(driver.check(repo.root, lockfile, JSON.stringify(options)));
   return result;
 }
@@ -162,7 +162,7 @@ self.onmessage = async ({ data }) => {
       latestLoad = id;
       post({ id, type: "loaded", ...(await load(data.repo, id)) });
     } else if (type === "check") {
-      const result = await check(data.root, data.lockfile, data.options);
+      const result = await check(id, data.root, data.lockfile, data.options);
       post({ id, type: "result", result });
       if (!result.error && result.rows.some((r) => r.lookup)) post({ id, type: "fixes", fixes: await fixes(result.rows) });
       else if (!result.error) post({ id, type: "fixes", fixes: {} });
