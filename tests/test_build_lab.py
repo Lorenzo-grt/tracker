@@ -244,7 +244,8 @@ class Helpers(unittest.TestCase):
                     z.writestr(name, "")
             self.assertEqual(build_lab.wheel_modules(wheel), (["grpc", "grpc._cython", "grpc._cython.cygrpc"],
                                                               ["grpc._cython.cygrpc"], 1))  # fmt: skip
-            self.assertEqual(build_lab.wheel_names(wheel), ["grpc", "grpc._cython", "grpc._cython.cygrpc"])
+            self.assertEqual(build_lab.wheel_names(wheel),
+                             {"modules": ["grpc._cython.cygrpc"], "packages": ["grpc", "grpc._cython"]})  # fmt: skip
             self.assertEqual(build_lab.wheel_tag(wheel), "cp314-cp314t-linux_x86_64")
             lib = Path(tmp) / "llvmlite-0.50.0-cp314-cp314-linux_x86_64.whl"  # a ctypes library, not a module
             with zipfile.ZipFile(lib, "w") as z:
@@ -266,29 +267,42 @@ class Helpers(unittest.TestCase):
                     z.writestr(name, "")
             self.assertEqual(build_lab.wheel_modules(ns), (["zope.interface", "zope.interface.declarations"], [], 0))
             # zope.interface's names, not zope.event's: a missing zope.event is a dependency, not the wheel's own.
-            self.assertEqual(build_lab.wheel_names(ns), ["zope", "zope.interface", "zope.interface.declarations",
-                                                         "zope.interface.tests", "zope.interface.tests.t"])  # fmt: skip
+            self.assertEqual(build_lab.wheel_names(ns), {"modules": ["zope.interface.declarations",
+                                                                     "zope.interface.tests.t"],
+                                                         "packages": ["zope.interface"]})  # fmt: skip
             tests = Path(tmp) / "greenlet-3.3-cp314-cp314t-win_arm64.whl"  # its test extension needs psutil
             with zipfile.ZipFile(tests, "w") as z:
                 for name in ["greenlet/__init__.py", "greenlet/_greenlet.cp314t-win_arm64.pyd",
                              "greenlet/tests/_test_extension.cp314t-win_arm64.pyd"]:  # fmt: skip
                     z.writestr(name, "")
-            self.assertEqual(build_lab.wheel_modules(tests)[0], ["greenlet", "greenlet._greenlet"])
+            self.assertEqual(build_lab.wheel_modules(tests), (["greenlet", "greenlet._greenlet"],
+                                                              ["greenlet._greenlet"], 2))  # fmt: skip
 
     def test_import_check(self):
-        # The check that runs on the lab's runners, here on fake packages: a module the wheel should have but doesn't
+        # The check that runs on the lab's runners, here on fake packages. A module the wheel should have but doesn't
         # is a failure; one from outside the wheel (an optional or undeclared dependency) is left out.
+        missing_stdlib = "fcntl" if sys.platform == "win32" else "msvcrt"  # in the stdlib, but not on this platform
+        files = {
+            "good/__init__.py": "",
+            "good/opt.py": "import cffi_backend_not_here\n",
+            "lost/__init__.py": "import lost._speedups\n",  # an extension the build left out
+            "_ext.py": "",
+            "zope/interface/__init__.py": "import zope.event_not_here\n",  # a namespace sibling: a dependency
+            "clib.py": "import ruamel_not_here\n",
+            "osonly.py": f"import {missing_stdlib}\n",
+            "noname.py": "raise ModuleNotFoundError('no name given')\n",
+            "linkerr.py": "raise ImportError('undefined symbol: foo')\n",
+            "ctypeslib.py": "raise ImportError('dynamic module does not define module export function (PyInit_ctypeslib)')\n",
+        }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "good").mkdir()
-            (root / "good" / "__init__.py").write_text("")
-            (root / "good" / "opt.py").write_text("import _cffi_backend_not_here\n")
-            (root / "lost").mkdir()
-            (root / "lost" / "__init__.py").write_text("from . import _speedups\n")
-            (root / "clib.py").write_text("import ruamel_not_here\n")
-            (root / "crash.py").write_text("raise ImportError('libtk8.6.so: No such file')\n")
-            names = root / "names.txt"
-            names.write_text("good\ngood.opt\nlost\nlost._speedups\nclib\ncrash")
+            for name, text in files.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(text)
+            names = root / "names.json"
+            names.write_text(json.dumps({"modules": ["good.opt", "_ext", "clib", "osonly", "noname",
+                                                     "linkerr", "ctypeslib"],
+                                         "packages": ["good", "lost", "zope.interface"]}))  # fmt: skip
 
             def run(mode, *modules):
                 c = subprocess.run([sys.executable, "-c", build_lab.IMPORT_CHECK, mode, str(names), *modules],
@@ -298,9 +312,14 @@ class Helpers(unittest.TestCase):
 
             self.assertEqual(run("top", "good", "good.opt"), (0, ["good"]))
             self.assertEqual(run("top", "clib"), (0, []))
-            self.assertEqual(run("top", "lost")[0], 1)
-            self.assertEqual(run("top", "crash")[0], 1)
-            self.assertEqual(run("extensions", "crash", "good.opt", "good", "lost"), (0, ["good"]))
+            self.assertEqual(run("top", "zope.interface"), (0, []))
+            self.assertEqual(run("top", "_ext", "lost")[0], 1)  # one module loading doesn't excuse another's own gap
+            self.assertEqual(run("top", "osonly")[0], 1)  # a stdlib module missing here fails here
+            self.assertEqual(run("top", "noname")[0], 1)
+            self.assertEqual(run("top", "ctypeslib")[0], 1)
+            self.assertEqual(run("extensions", "osonly", "ctypeslib", "clib", "_ext"), (0, ["_ext"]))
+            self.assertEqual(run("extensions", "_ext", "linkerr")[0], 1)
+            self.assertEqual(run("extensions", "_ext", "lost")[0], 1)
 
     def test_run_refuses_what_the_plan_never_makes_and_a_wrong_interpreter(self):
         self.assertEqual(build_lab.main(["run", "--name", "x; rm", "--version", "1", "--target", "3.14 win-arm64",

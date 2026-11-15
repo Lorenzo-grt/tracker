@@ -234,7 +234,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     coverage = json.loads(Path(args.coverage).read_text(encoding="utf-8"))
     builds_path = Path(args.builds)
     builds = json.loads(builds_path.read_text(encoding="utf-8")) if builds_path.exists() else None
-    only = {canonical(n) for n in args.only.split(",") if n.strip()} if args.only else None
+    only = {canonical(n.strip()) for n in args.only.split(",") if n.strip()} if args.only else None
     jobs = plan(coverage, builds, args.max, today(), args.top, args.refresh, only)
     hosted = [j for j in jobs if "image" not in j]
     docker = [j for j in jobs if "image" in j]
@@ -285,7 +285,7 @@ def wheel_tag(wheel: Path) -> str:
 
 def wheel_modules(wheel: Path) -> tuple[list[str], list[str], int]:
     """What to import from a wheel: its shallowest packages and modules (namespace packages included, tests left out),
-    its extension modules by dotted name, and how many extension modules there are."""
+    its extension modules by dotted name (test helpers left out), and how many extension modules there are."""
     with zipfile.ZipFile(wheel) as z:
         entries = [e for e in z.namelist() if not e.split("/", 1)[0].endswith((".dist-info", ".data"))]
     dotted = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", re.ASCII)
@@ -297,7 +297,8 @@ def wheel_modules(wheel: Path) -> tuple[list[str], list[str], int]:
             name = ".".join([*parts[:-1], parts[-1].split(".", 1)[0]])
             if dotted.fullmatch(name):
                 extensions.append(name)
-    modules = {e for e in extensions if not any(p in ("tests", "test") for p in e.split("."))}
+    shipped = [e for e in extensions if not any(p in ("tests", "test") for p in e.split("."))]  # not test helpers
+    modules = set(shipped)
     for e in entries:
         if not e.endswith(".py"):
             continue
@@ -308,46 +309,81 @@ def wheel_modules(wheel: Path) -> tuple[list[str], list[str], int]:
         if parts and dotted.fullmatch(name) and not any(p in ("tests", "test") for p in parts):
             modules.add(name)
     shallow = sorted(modules, key=lambda m: (m.count("."), m))
-    return shallow[:3], sorted(set(extensions))[:MAX_EXTENSIONS], len(set(extensions))
+    return shallow[:3], sorted(set(shipped))[:MAX_EXTENSIONS], len(set(extensions))
 
 
-def wheel_names(wheel: Path) -> list[str]:
-    """Every module and package a wheel installs, by dotted name: a missing module with one of these names is the
-    wheel's own, and any other is a dependency."""
+def wheel_names(wheel: Path) -> dict[str, list[str]]:
+    """Every module a wheel installs, and its regular packages (those with an __init__), by dotted name: a missing
+    module is the wheel's own if it's one of the modules or inside one of the packages, and otherwise a dependency."""
     with zipfile.ZipFile(wheel) as z:
         entries = [e for e in z.namelist() if not e.split("/", 1)[0].endswith((".dist-info", ".data"))]
-    names = set()
+    dotted = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", re.ASCII)
+    modules, packages = set(), set()
     for e in entries:
         parts = e.split("/")
         if not parts[-1].endswith((".py", ".pyd", ".so")):
             continue
         last = parts[-1].split(".", 1)[0]
-        names.update(".".join(parts[:i]) for i in range(1, len(parts)))
-        if last != "__init__":
-            names.add(".".join([*parts[:-1], last]))
-    return sorted(n for n in names if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", n, re.ASCII))
+        if last == "__init__":
+            packages.add(".".join(parts[:-1]))
+        else:
+            modules.add(".".join([*parts[:-1], last]))
+    return {"modules": sorted(n for n in modules if dotted.fullmatch(n)),
+            "packages": sorted(n for n in packages if dotted.fullmatch(n))}  # fmt: skip
 
 
-# argv: "top" or "extensions", a file listing the wheel's module names (wheel_names), then the modules. "top" must
-# import each module, but leaves out one that needs a module from outside the wheel; "extensions" imports what it can.
+# argv: "top" or "extensions", a JSON file from wheel_names, then the modules. "top" must import each module, but
+# leaves out one that needs a module from outside the wheel (an optional or undeclared dependency, missing on every
+# platform alike). "extensions" also excuses the interpreter's own modules failing (no Tk in the image) and ctypes
+# libraries named like extension modules; anything else is a failure there too.
 IMPORT_CHECK = """
-import importlib, json, re, sys, warnings
+import importlib, json, os, re, sys, sysconfig, warnings
 mode, names = sys.argv[1], sys.argv[3:]
 with open(sys.argv[2], encoding="utf-8") as f:
-    ours = set(f.read().split())
+    wheel = json.load(f)
+modules, packages = set(wheel["modules"]), set(wheel["packages"])
+paths = sysconfig.get_paths()
+real = lambda p: os.path.normcase(os.path.realpath(p))
+stdlib = [real(paths[k]) for k in ("stdlib", "platstdlib")]
+installed = [real(paths[k]) for k in ("purelib", "platlib")]
+
+def own(name):
+    parts = name.split(".")
+    return name in modules or any(".".join(parts[:i]) in packages for i in range(1, len(parts) + 1))
+
+def in_stdlib(e):
+    tb = e.__traceback__
+    while tb and tb.tb_next:
+        tb = tb.tb_next
+    if tb is None:
+        return False
+    f = real(tb.tb_frame.f_code.co_filename)
+    return any(f.startswith(d + os.sep) for d in stdlib) and not any(f.startswith(d + os.sep) for d in installed)
+
+def excused(e):
+    if isinstance(e, ModuleNotFoundError) and e.name:
+        if e.name.split(".")[0] in sys.stdlib_module_names:
+            return mode == "extensions"
+        return not own(e.name)
+    if mode != "extensions":
+        return False
+    text = str(e)
+    if isinstance(e, ImportError) and "does not define module export function" in text:
+        return True  # a ctypes library named like an extension module
+    if isinstance(e, SystemError) and "failed without raising an exception" in text:
+        return True  # the same, on Windows
+    return isinstance(e, ImportError) and in_stdlib(e)
+
 module = None
 loaded = []
+gil = getattr(sys, "_is_gil_enabled", None)
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always")
     for m in names:
         try:
             importlib.import_module(m)
-        except ModuleNotFoundError as e:
-            if mode == "top" and (e.name is None or e.name in ours):
-                raise
-            continue
-        except Exception:
-            if mode == "top":
+        except Exception as e:
+            if not excused(e):
                 raise
             continue
         loaded.append(m)
@@ -355,7 +391,6 @@ for w in caught:
     found = re.search(r"has been enabled to load module '([A-Za-z0-9_.]{1,100})'", str(w.message))
     if found and module is None:
         module = found.group(1)
-gil = getattr(sys, "_is_gil_enabled", None)
 print("WHEELGAP-LAB " + json.dumps({"gil_enabled": gil() if gil else None, "module": module, "loaded": loaded}))
 """
 GIL_MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,9}", re.ASCII)
@@ -401,8 +436,8 @@ def run_build(name: str, version: str, target: str, work: Path) -> dict | None:
         return {"outcome": "failed", "seconds": seconds, "wheel": None, "extensions": None, "import": None,
                 "gil": None, "gil_module": None, "reason": classify(log), "excerpt": excerpt(log)}  # fmt: skip
     modules, extension_modules, extensions = wheel_modules(built[0])
-    ours = work / "wheel-modules.txt"
-    ours.write_text("\n".join(wheel_names(built[0])), encoding="utf-8")
+    ours = work / "wheel-modules.json"
+    ours.write_text(json.dumps(wheel_names(built[0])), encoding="utf-8")
     result = {"outcome": "built", "seconds": seconds, "wheel": wheel_tag(built[0]), "extensions": extensions,
               "import": None, "gil": None, "gil_module": None, "reason": None, "excerpt": ""}  # fmt: skip
     install = [sys.executable, "-m", "pip", "install", "--no-cache-dir", str(built[0])]
@@ -418,38 +453,44 @@ def run_build(name: str, version: str, target: str, work: Path) -> dict | None:
     if not modules:
         print("build_lab: the wheel has nothing to import; not recording this", file=sys.stderr)
         return None
-    top = _import_check(work, env, "top", ours, modules)
-    if top is None or top[0] != 0 or top[1] is None:
-        result["import"] = "failed"
-        result["excerpt"] = excerpt(top[2]) if top else "import timed out"
-        return result
-    if not top[1]["loaded"]:
-        print("build_lab: every module needs one from outside the wheel; not recording this", file=sys.stderr)
-        return None
-    answer = top[1]
-    if extensions:
-        ext = _import_check(work, env, "extensions", ours, extension_modules)
-        if ext is None or ext[0] != 0 or ext[1] is None or not ext[1]["loaded"]:
-            print("build_lab: no extension module loaded on its own; not recording this", file=sys.stderr)
+    answers = []
+    for mode, names in (("top", modules), ("extensions", extension_modules)):
+        if mode == "extensions" and not extensions:
+            break
+        check = _import_check(work, env, mode, ours, names)
+        if check is None:
+            print(f"build_lab: the {mode} import check gave no answer; not recording this", file=sys.stderr)
             return None
-        answer = ext[1]
+        code, answer, stderr = check
+        if code != 0 or answer is None:
+            result["import"] = "failed"
+            result["excerpt"] = excerpt(stderr)
+            return result
+        if not answer["loaded"]:
+            print(f"build_lab: nothing loaded in the {mode} import check; not recording this", file=sys.stderr)
+            return None
+        answers.append(answer)
     result["import"] = "ok"
     if free_threaded and extensions:
-        result["gil"] = "re-enabled" if answer["gil_enabled"] else "kept-off"
-        module = answer.get("module")
-        if result["gil"] == "re-enabled" and isinstance(module, str) and GIL_MODULE.fullmatch(module):
+        # Either check may be the one that turned it back on (a top-level import can load a dependency's module).
+        on = [a for a in answers if a["gil_enabled"]]
+        result["gil"] = "re-enabled" if on else "kept-off"
+        module = next((a["module"] for a in on if a.get("module")), None)
+        if on and isinstance(module, str) and GIL_MODULE.fullmatch(module):
             result["gil_module"] = module  # the module CPython's RuntimeWarning names
     return result
 
 
 def _import_check(work: Path, env: dict, mode: str, ours: Path, modules: list[str]) -> tuple[int, dict | None, str] | None:
-    """Run IMPORT_CHECK in a fresh interpreter: (exit code, its answer or None, stderr), or None if it timed out."""
+    """Run IMPORT_CHECK in a fresh interpreter: (exit code, its answer or None, stderr). A timeout is a failure; an
+    exit without an answer and without an error (something called sys.exit(0) on import) is None: no answer."""
     try:
-        c = subprocess.run([sys.executable, "-c", IMPORT_CHECK, mode, str(ours), *modules], check=False, capture_output=True,
-                           text=True, errors="replace", timeout=IMPORT_TIMEOUT, cwd=work, env=env)  # fmt: skip
+        c = subprocess.run([sys.executable, "-c", IMPORT_CHECK, mode, str(ours), *modules], check=False,
+                           capture_output=True, text=True, errors="replace", timeout=IMPORT_TIMEOUT, cwd=work,
+                           env=env)  # fmt: skip
     except subprocess.TimeoutExpired:
         print("import timed out")
-        return None
+        return 1, None, "import timed out"
     line = next((ln for ln in reversed(c.stdout.splitlines()) if ln.startswith("WHEELGAP-LAB ")), None)
     if c.returncode != 0 or line is None:
         print((c.stdout + c.stderr)[-3000:])
@@ -459,6 +500,8 @@ def _import_check(work: Path, env: dict, mode: str, ours: Path, modules: list[st
         answer = None
     if not isinstance(answer, dict) or not isinstance(answer.get("loaded"), list):
         answer = None
+    if c.returncode == 0 and answer is None:
+        return None
     return c.returncode, answer, c.stderr
 
 
