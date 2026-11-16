@@ -43,6 +43,7 @@ import tarfile
 import tempfile
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -273,10 +274,11 @@ def problems(result: object, job: dict) -> list[str]:
 
 
 def verify(
-    jobs: list[dict], results: dict[tuple[str, int], object], published: dict[tuple[str, str], dict[str, str] | None]
+    jobs: list[dict], results: dict[tuple[str, int], object], published: Callable[[str, str], dict[str, str] | None]
 ) -> tuple[list[dict], list[dict]]:
-    """(verified wheels, every pair with its verdict) from the plan's jobs, the results by (id, attempt), and PyPI's
-    sdists by (name, version): {filename: sha256}, or None if PyPI couldn't be asked."""
+    """(verified wheels, every pair with its verdict) from the plan's jobs, the results by (id, attempt), and a lookup
+    of PyPI's sdists for a release, {filename: sha256} or None if PyPI couldn't be asked. It's only asked about pairs
+    whose two builds agree."""
     verified, report = [], []
     by_id: dict[str, dict[int, dict]] = {}
     for job in jobs:
@@ -299,7 +301,7 @@ def verify(
             second["sdist_sha256"],
         ):
             verdict = "the two builds differ"
-        elif (sdists := published.get((job["name"], job["version"]))) is None:
+        elif (sdists := published(job["name"], job["version"])) is None:
             verdict = "couldn't check the sdist against PyPI"
         elif sdists.get(first["sdist"]) != first["sdist_sha256"]:
             verdict = "the sdist isn't the one PyPI publishes"
@@ -317,7 +319,7 @@ def pypi_sdists(name: str, version: str) -> dict[str, str] | None:
     """The release's sdists on PyPI, {filename: sha256}, or None if PyPI couldn't be asked."""
     url = f"https://pypi.org/pypi/{name}/{version}/json"
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
+        with urllib.request.urlopen(url, timeout=10) as r:
             data = json.load(r)
     except (OSError, ValueError):
         return None
@@ -346,10 +348,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
         path = Path(args.results) / f"result-{job['id']}-{job['attempt']}" / "result.json"
         if path.is_file():
             results[(job["id"], job["attempt"])] = read_result(path)
-    published = {(j["name"], j["version"]): None for j in jobs}
-    for name, version in published:
-        published[(name, version)] = pypi_sdists(name, version)
-    verified, report = verify(jobs, results, published)
+    verified, report = verify(jobs, results, pypi_sdists)
     run = ""
     if all(os.environ.get(k) for k in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID")):
         run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"

@@ -85,7 +85,8 @@ class Verify(unittest.TestCase):
         if second is not None:
             results[("0", 2)] = second
         published = {("tiktoken", "0.14.0"): {"tiktoken-0.14.0.tar.gz": "a" * 64}}
-        verified, report = gap_wheels.verify(self.jobs, results, published | self.published)
+        published |= self.published
+        verified, report = gap_wheels.verify(self.jobs, results, lambda name, version: published[(name, version)])
         return verified, report[0]["verdict"]
 
     def test_identical_and_installs(self):
@@ -118,8 +119,17 @@ class Verify(unittest.TestCase):
                 self.assertTrue(verdict.startswith("rejected"), verdict)
 
     def test_normalized_versions_and_compressed_tags(self):
-        wheel = "tiktoken-0.14.0-cp314-cp314-win_arm64.win_amd64.whl"
-        self.assertEqual(self.verdict(good(self.one, wheel=wheel), good(self.two, wheel=wheel))[1], "verified")
+        for wheel in ("tiktoken-0.14.0-cp314-cp314-win_arm64.win_amd64.whl", "tiktoken-0.14.0-cp314-cp314-WIN_ARM64.whl"):
+            with self.subTest(wheel):
+                self.assertTrue(self.verdict(good(self.one, wheel=wheel), good(self.two, wheel=wheel))[1].startswith(
+                    "verified" if "win_amd64" in wheel else "rejected"))  # fmt: skip
+        self.jobs[0]["version"] = self.jobs[1]["version"] = "0.14.0RC1"
+        wheel = "tiktoken-0.14.0rc1-cp314-cp314-win_arm64.whl"
+        published = {("tiktoken", "0.14.0RC1"): {"tiktoken-0.14.0RC1.tar.gz": "a" * 64}}
+        results = {("0", 1): good(self.jobs[0], wheel=wheel, sdist="tiktoken-0.14.0RC1.tar.gz"),
+                   ("0", 2): good(self.jobs[1], wheel=wheel, sdist="tiktoken-0.14.0RC1.tar.gz")}  # fmt: skip
+        report = gap_wheels.verify(self.jobs, results, lambda n, v: published[(n, v)])[1]
+        self.assertEqual(report[0]["verdict"], "verified")
 
     def test_missing_result(self):
         self.assertEqual(self.verdict(good(self.one), None)[1], "a build has no result")

@@ -44,7 +44,8 @@ jobs:
           persist-credentials: false
       - id: plan
         env:
-          MAX: ${{ inputs.max || '50' }}
+          # A pull request builds a small batch (twice each) to check the pipeline; dispatch runs everything.
+          MAX: ${{ github.event_name == 'pull_request' && '4' || inputs.max || '50' }}
           ONLY: ${{ inputs.only }}
         run: python3 scripts/gap_wheels.py plan data/builds.json --max "$MAX" ${ONLY:+--only "$ONLY"} --github-output "$GITHUB_OUTPUT"
 
