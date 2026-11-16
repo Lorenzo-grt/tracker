@@ -13,15 +13,19 @@ twice, in separate jobs on separate runners:
 - with SOURCE_DATE_EPOCH fixed, and on Windows with `-Brepro` for MSVC's compiler and linker and `codegen-units=1`
   for Rust (spelt `-Brepro`, since Git Bash rewrites a leading `/` into a Windows path).
 
-A wheel is *verified* when both builds give byte-identical wheels and pip installs it, with `--only-binary :all:`
-(compiling nothing), into a fresh virtual environment on the first build's runner. The merge job writes a manifest
-of the verified wheels: filename, sha256, the sdist's name and sha256, and the run that built them.
+A wheel is *verified* when both builds give byte-identical wheels from the sdist PyPI publishes (merge checks its
+sha256 against PyPI's), and pip installs that wheel file, with `--only-binary :all:` (compiling nothing), into a fresh
+virtual environment on the first build's runner. The merge job writes a manifest of the verified wheels: filename,
+sha256, the sdist's name and sha256, and the run that built them.
 
 Build jobs run each package's own build code with the runner's admin rights, so they're untrusted, as in the build
 lab: they get a read-only token and no secrets, and merge accepts a result only if it is exactly what `build` writes,
-for the pair and attempt the plan gave that job. Requiring two builds to match is what makes a wheel worth trusting:
-a build that tampered with its own output, or another job's, would have to do it identically in both. This step
-uploads no wheel anywhere: only results (hashes) leave the build jobs.
+for the pair and attempt the plan gave that job. Two matching builds catch a build that isn't reproducible; they
+don't stop a malicious package. What this can't rule out yet: build code with admin rights could read the job's
+artifact token and upload well-formed results under another job's name, for both attempts, with any hash it likes.
+So these hashes are observations, not a basis for publishing: before anything is published (step 3), each result
+must come from somewhere only its own job can write. This step uploads no wheel anywhere: only results (hashes)
+leave the build jobs.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -136,7 +141,8 @@ def unpack(sdist: Path, dest: Path) -> Path:
 
 
 def build_env() -> dict[str, str]:
-    env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_NO_INPUT="1", SOURCE_DATE_EPOCH="1700000000")
+    env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_NO_INPUT="1", SOURCE_DATE_EPOCH="1700000000",
+               PYTHONHASHSEED="0")  # fmt: skip
     if os.name == "nt":
         env.update(CL="-Brepro", LINK="-Brepro", RUSTFLAGS="-C link-arg=-Brepro -C codegen-units=1")
     return env
@@ -181,8 +187,9 @@ def run_build(name: str, version: str, attempt: int, work: Path) -> dict:
         subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=INSTALL_TIMEOUT)
         py = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         try:
+            # The file itself, not NAME==VERSION: PyPI may have a wheel of its own by now, which pip could prefer.
             i = subprocess.run([str(py), "-m", "pip", "install", "--only-binary", ":all:", "--no-cache-dir",
-                                "--find-links", str(out), f"{name}=={version}"], check=False, env=env,
+                                str(wheels[0])], check=False, env=env,
                                capture_output=True, text=True, errors="replace",
                                timeout=INSTALL_TIMEOUT)  # fmt: skip
             print((i.stdout + i.stderr)[-3000:])
@@ -205,7 +212,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     if (why := build_lab.interpreter_problem(target)) is not None:
         print(f"gap_wheels: this Python isn't {target}'s: {why}", file=sys.stderr)
         return 3
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         fields = run_build(args.name, args.version, args.attempt, Path(tmp))
     result = {"schema": SCHEMA, "name": args.name, "version": args.version, "target": target,
               "attempt": args.attempt, "runner": args.runner, **fields}  # fmt: skip
@@ -227,9 +234,10 @@ def wheel_problem(wheel: object, job: dict) -> str | None:
     name, version, platform = parts[0], parts[1], parts[-1]
     if build_lab.canonical(name) != build_lab.canonical(job["name"]):
         return "wheel is for another project"
-    if version.replace("_", "-") != job["version"] and version != job["version"]:
+    if version.lower() not in {job["version"].lower(), job["version"].lower().replace("-", "_")}:
         return "wheel is for another version"
-    if not re.fullmatch(build_lab.TARGETS[job["target"]]["wheel"], platform, re.ASCII):
+    tag = build_lab.TARGETS[job["target"]]["wheel"]
+    if not any(re.fullmatch(tag, p, re.ASCII) for p in platform.split(".")):  # a compressed tag set: one must match
         return "wheel isn't for the target"
     return None
 
@@ -255,6 +263,8 @@ def problems(result: object, job: dict) -> list[str]:
         out.append(why)
     if (result["wheel"] is None) != (result["sha256"] is None):
         out.append("wheel and sha256 go together")
+    if result["wheel"] is not None and (result["sdist"] is None or result["sdist_sha256"] is None):
+        out.append("a wheel needs its sdist and sdist_sha256")
     if result["installs"] is not None and not isinstance(result["installs"], bool):
         out.append("installs")
     if job["attempt"] == 2 and result["installs"] is not None:
@@ -262,8 +272,11 @@ def problems(result: object, job: dict) -> list[str]:
     return out
 
 
-def verify(jobs: list[dict], results: dict[tuple[str, int], object]) -> tuple[list[dict], list[dict]]:
-    """(verified wheels, every pair with its verdict) from the plan's jobs and the results by (id, attempt)."""
+def verify(
+    jobs: list[dict], results: dict[tuple[str, int], object], published: dict[tuple[str, str], dict[str, str] | None]
+) -> tuple[list[dict], list[dict]]:
+    """(verified wheels, every pair with its verdict) from the plan's jobs, the results by (id, attempt), and PyPI's
+    sdists by (name, version): {filename: sha256}, or None if PyPI couldn't be asked."""
     verified, report = [], []
     by_id: dict[str, dict[int, dict]] = {}
     for job in jobs:
@@ -286,6 +299,10 @@ def verify(jobs: list[dict], results: dict[tuple[str, int], object]) -> tuple[li
             second["sdist_sha256"],
         ):
             verdict = "the two builds differ"
+        elif (sdists := published.get((job["name"], job["version"]))) is None:
+            verdict = "couldn't check the sdist against PyPI"
+        elif sdists.get(first["sdist"]) != first["sdist_sha256"]:
+            verdict = "the sdist isn't the one PyPI publishes"
         elif first["installs"] is not True:
             verdict = "pip couldn't install it without compiling"
         else:
@@ -294,6 +311,23 @@ def verify(jobs: list[dict], results: dict[tuple[str, int], object]) -> tuple[li
                              "sdist_sha256": first["sdist_sha256"]})  # fmt: skip
         report.append({**row, "verdict": verdict})
     return verified, report
+
+
+def pypi_sdists(name: str, version: str) -> dict[str, str] | None:
+    """The release's sdists on PyPI, {filename: sha256}, or None if PyPI couldn't be asked."""
+    url = f"https://pypi.org/pypi/{name}/{version}/json"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            data = json.load(r)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("urls"), list):
+        return None
+    return {
+        u["filename"]: u.get("digests", {}).get("sha256")
+        for u in data["urls"]
+        if isinstance(u, dict) and u.get("packagetype") == "sdist" and isinstance(u.get("filename"), str)
+    }
 
 
 def read_result(path: Path) -> object:
@@ -312,7 +346,10 @@ def cmd_merge(args: argparse.Namespace) -> int:
         path = Path(args.results) / f"result-{job['id']}-{job['attempt']}" / "result.json"
         if path.is_file():
             results[(job["id"], job["attempt"])] = read_result(path)
-    verified, report = verify(jobs, results)
+    published = {(j["name"], j["version"]): None for j in jobs}
+    for name, version in published:
+        published[(name, version)] = pypi_sdists(name, version)
+    verified, report = verify(jobs, results, published)
     run = ""
     if all(os.environ.get(k) for k in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID")):
         run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"

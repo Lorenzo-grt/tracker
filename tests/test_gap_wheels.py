@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from scripts import gap_wheels
 
@@ -74,6 +75,7 @@ class Plan(unittest.TestCase):
 class Verify(unittest.TestCase):
     def setUp(self):
         self.jobs = gap_wheels.plan(BUILDS, 1, {"tiktoken"})
+        self.published = {}
         self.one, self.two = self.jobs
 
     def verdict(self, first, second):
@@ -82,7 +84,8 @@ class Verify(unittest.TestCase):
             results[("0", 1)] = first
         if second is not None:
             results[("0", 2)] = second
-        verified, report = gap_wheels.verify(self.jobs, results)
+        published = {("tiktoken", "0.14.0"): {"tiktoken-0.14.0.tar.gz": "a" * 64}}
+        verified, report = gap_wheels.verify(self.jobs, results, published | self.published)
         return verified, report[0]["verdict"]
 
     def test_identical_and_installs(self):
@@ -101,6 +104,22 @@ class Verify(unittest.TestCase):
     def test_doesnt_install(self):
         self.assertEqual(self.verdict(good(self.one, installs=False), good(self.two))[1],
                          "pip couldn't install it without compiling")  # fmt: skip
+
+    def test_the_sdist_must_be_pypis(self):
+        both = (good(self.one, sdist_sha256="c" * 64), good(self.two, sdist_sha256="c" * 64))
+        self.assertEqual(self.verdict(*both)[1], "the sdist isn't the one PyPI publishes")
+        self.published = {("tiktoken", "0.14.0"): None}
+        self.assertEqual(self.verdict(good(self.one), good(self.two))[1], "couldn't check the sdist against PyPI")
+
+    def test_a_wheel_without_its_sdist_is_rejected(self):
+        for over in ({"sdist": None}, {"sdist_sha256": None}):
+            with self.subTest(over):
+                verdict = self.verdict(good(self.one, **over), good(self.two, **over))[1]
+                self.assertTrue(verdict.startswith("rejected"), verdict)
+
+    def test_normalized_versions_and_compressed_tags(self):
+        wheel = "tiktoken-0.14.0-cp314-cp314-win_arm64.win_amd64.whl"
+        self.assertEqual(self.verdict(good(self.one, wheel=wheel), good(self.two, wheel=wheel))[1], "verified")
 
     def test_missing_result(self):
         self.assertEqual(self.verdict(good(self.one), None)[1], "a build has no result")
@@ -146,8 +165,10 @@ class Merge(unittest.TestCase):
             big = tmp / "results" / "result-9-1"
             big.mkdir()
             (big / "result.json").write_text("x" * 20_000)  # not in the plan: never read
-            gap_wheels.main(["merge", str(tmp / "results"), "--plan", str(tmp / "plan.json"), "--out",
-                             str(tmp / "manifest.json"), "--summary", str(tmp / "summary.md")])  # fmt: skip
+            sdists = {"lz4-4.4.5.tar.gz": "a" * 64, "tiktoken-0.14.0.tar.gz": "a" * 64}
+            with mock.patch.object(gap_wheels, "pypi_sdists", lambda name, version: sdists):
+                gap_wheels.main(["merge", str(tmp / "results"), "--plan", str(tmp / "plan.json"), "--out",
+                                 str(tmp / "manifest.json"), "--summary", str(tmp / "summary.md")])  # fmt: skip
             manifest = json.loads((tmp / "manifest.json").read_text())
             summary = (tmp / "summary.md").read_text()
         self.assertEqual([w["name"] for w in manifest["wheels"]], ["lz4"])
