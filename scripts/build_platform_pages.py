@@ -35,6 +35,7 @@ def _page(title: str, lede: str, meta: str, content: str, canonical: str, root: 
   <meta http-equiv="Content-Security-Policy" content="{e(CSP, quote=True)}">
   <title>{e(title)}</title>
   <meta name="description" content="{e(lede, quote=True)}">
+{build_campaigns.og_tags(title, lede, canonical)}
   <link rel="canonical" href="{e(canonical, quote=True)}">
   <link rel="stylesheet" href="{root}style.css">
   <link rel="icon" href="{root}favicon.svg" type="image/svg+xml">

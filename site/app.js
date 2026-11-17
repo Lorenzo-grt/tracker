@@ -589,8 +589,13 @@ function renderLeaderboard() {
   container.innerHTML = cardsHtml;
 }
 
+function scrollBehavior() {
+  return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "auto" : "smooth";
+}
+
 function scrollToGaps() {
-  $("gaps-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("gaps-title")?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
 // ============================================================================
@@ -1362,6 +1367,7 @@ async function main() {
     if (btn) selectStatus(btn);
   });
   statusFilters?.addEventListener("keydown", (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return; // Alt+Left still goes back, as everywhere else
     const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
     if (!step) return;
     const buttons = Array.from(statusFilters.querySelectorAll(".pill-filter"));
@@ -1408,7 +1414,7 @@ async function main() {
     if (!Number.isFinite(p) || p === state.currentPage) return;
     state.currentPage = p;
     renderGaps();
-    $("gaps-title").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("gaps-title").scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   };
   $("pagination-buttons-top")?.addEventListener("click", handlePageClick);
   $("pagination-buttons-bottom")?.addEventListener("click", handlePageClick);

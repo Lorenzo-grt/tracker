@@ -303,7 +303,7 @@ test("sortable headings are native buttons and status pills have radio semantics
   assert.equal(headings.length, 4);
   for (const [, attrs, content] of headings) {
     assert.match(attrs, /scope="col"/);
-    assert.match(content, /^<button type="button">.+<span class="sort-icon">.+<\/span><\/button>$/);
+    assert.match(content, /^<button type="button">.+<span class="sort-icon" aria-hidden="true">.+<\/span><\/button>$/);
     assert.doesNotMatch(content, /aria-sort/);
   }
   const pills = [...html.matchAll(/<button\b([^>]*\bclass="pill-filter[^>]+)>/g)];
@@ -357,6 +357,27 @@ test("status radios wrap with arrow keys and update focus, checked state and fil
   assert.ok(statuses.length > 0 && statuses.every((s) => s === "source"));
   page.group.handlers.keydown({ target: page.pills[1], key: "Tab", preventDefault() { assert.fail("Tab must leave the group"); } });
   check(1);
+});
+
+
+test("platform cards and both pagers respect the current reduced-motion preference (#147)", async () => {
+  const page = await loadPage("");
+  const scrolls = [];
+  page.get("gaps-title").scrollIntoView = (options) => scrolls.push({ ...options });
+
+  for (const reduced of [false, true, false, undefined]) {
+    page.context.window.matchMedia = reduced === undefined ? undefined
+      : (query) => ({ matches: query === "(prefers-reduced-motion: reduce)" && reduced });
+    const behavior = reduced ? "auto" : "smooth";
+    page.get("platform-leaderboard").handlers.click(cardClick("win-arm64"));
+    for (const [position, number] of [["top", "2"], ["bottom", "3"]]) {
+      const button = { disabled: false, dataset: { page: number } };
+      page.get(`pagination-buttons-${position}`).handlers.click({
+        target: { closest: (selector) => selector === "button.page-btn" ? button : null },
+      });
+    }
+    assert.deepEqual(scrolls.splice(0), Array.from({ length: 3 }, () => ({ behavior, block: "start" })));
+  }
 });
 
 test("clicking a platform card updates the lookup's \"Why?\" command (#56)", async () => {

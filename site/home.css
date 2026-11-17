@@ -2270,3 +2270,14 @@ a.blocker-ex:hover {
 .spark-note:empty { display: none; }
 .spark-note { margin-top: 10px; }
 .footer-credit { margin: 14px 0 0; font-size: 0.8rem; color: var(--text-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
