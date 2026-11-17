@@ -589,8 +589,13 @@ function renderLeaderboard() {
   container.innerHTML = cardsHtml;
 }
 
+function scrollBehavior() {
+  return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "auto" : "smooth";
+}
+
 function scrollToGaps() {
-  $("gaps-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("gaps-title")?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
 // ============================================================================
@@ -1395,7 +1400,7 @@ async function main() {
     if (!Number.isFinite(p) || p === state.currentPage) return;
     state.currentPage = p;
     renderGaps();
-    $("gaps-title").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("gaps-title").scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   };
   $("pagination-buttons-top")?.addEventListener("click", handlePageClick);
   $("pagination-buttons-bottom")?.addEventListener("click", handlePageClick);

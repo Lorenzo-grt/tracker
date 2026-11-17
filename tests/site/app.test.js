@@ -259,6 +259,26 @@ async function loadPage(hash, packageData = null, gapWheelIndex = null) {
 const coverage = () => JSON.parse(fs.readFileSync(path.join(ROOT, "data", "coverage.json"), "utf8"));
 const cardClick = (platform) => ({ target: { closest: (sel) => (sel === ".leaderboard-card" ? { dataset: { pl: platform } } : null) } });
 
+test("platform cards and both pagers respect the current reduced-motion preference (#147)", async () => {
+  const page = await loadPage("");
+  const scrolls = [];
+  page.get("gaps-title").scrollIntoView = (options) => scrolls.push({ ...options });
+
+  for (const reduced of [false, true, false, undefined]) {
+    page.context.window.matchMedia = reduced === undefined ? undefined
+      : (query) => ({ matches: query === "(prefers-reduced-motion: reduce)" && reduced });
+    const behavior = reduced ? "auto" : "smooth";
+    page.get("platform-leaderboard").handlers.click(cardClick("win-arm64"));
+    for (const [position, number] of [["top", "2"], ["bottom", "3"]]) {
+      const button = { disabled: false, dataset: { page: number } };
+      page.get(`pagination-buttons-${position}`).handlers.click({
+        target: { closest: (selector) => selector === "button.page-btn" ? button : null },
+      });
+    }
+    assert.deepEqual(scrolls.splice(0), Array.from({ length: 3 }, () => ({ behavior, block: "start" })));
+  }
+});
+
 test("clicking a platform card updates the lookup's \"Why?\" command (#56)", async () => {
   const data = coverage();
   const python = data.targets[0].python;
